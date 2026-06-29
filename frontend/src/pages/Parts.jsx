@@ -1,13 +1,117 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { Search, Plus, Package, WifiOff } from 'lucide-react'
-import { getParts } from '../api'
+import { Search, Plus, Package, WifiOff, X } from 'lucide-react'
+import { getParts, createPart } from '../api'
+
+const EMPTY = { title: '', code_internal: '', brand: '', condition: 'used', quantity: 1, sale_price: '', cost_price: '' }
+
+function NewPartModal({ onClose }) {
+  const [form, setForm] = useState(EMPTY)
+  const [err, setErr] = useState('')
+  const qc = useQueryClient()
+
+  const mutation = useMutation({
+    mutationFn: createPart,
+    onSuccess: () => { qc.invalidateQueries(['parts']); onClose() },
+    onError: e => setErr(e?.response?.data?.detail || 'Erro ao salvar'),
+  })
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const submit = (e) => {
+    e.preventDefault()
+    if (!form.title.trim()) return setErr('Título obrigatório')
+    setErr('')
+    mutation.mutate({
+      ...form,
+      quantity: Number(form.quantity) || 0,
+      sale_price: Number(form.sale_price) || 0,
+      cost_price: Number(form.cost_price) || 0,
+    })
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative bg-white w-full md:max-w-lg md:rounded-2xl rounded-t-2xl p-6 max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="text-lg font-bold text-gray-900">Nova peça</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+        </div>
+
+        <form onSubmit={submit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Título *</label>
+            <input value={form.title} onChange={e => set('title', e.target.value)}
+              placeholder="Ex: Tampa Motor Fiat Uno 2010"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500" />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Código interno</label>
+              <input value={form.code_internal} onChange={e => set('code_internal', e.target.value)}
+                placeholder="EST-001"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Marca</label>
+              <input value={form.brand} onChange={e => set('brand', e.target.value)}
+                placeholder="Fiat"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500" />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Estado</label>
+              <select value={form.condition} onChange={e => set('condition', e.target.value)}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500">
+                <option value="used">Usado</option>
+                <option value="new">Novo</option>
+                <option value="reconditioned">Recondicionado</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Quantidade</label>
+              <input type="number" min="0" value={form.quantity} onChange={e => set('quantity', e.target.value)}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500" />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Preço de venda (R$)</label>
+              <input type="number" step="0.01" min="0" value={form.sale_price} onChange={e => set('sale_price', e.target.value)}
+                placeholder="0,00"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Custo (R$)</label>
+              <input type="number" step="0.01" min="0" value={form.cost_price} onChange={e => set('cost_price', e.target.value)}
+                placeholder="0,00"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500" />
+            </div>
+          </div>
+
+          {err && <p className="text-red-500 text-sm">{err}</p>}
+
+          <button type="submit" disabled={mutation.isPending}
+            className="w-full bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white py-3 rounded-lg font-medium transition-colors">
+            {mutation.isPending ? 'Salvando...' : 'Salvar peça'}
+          </button>
+        </form>
+      </div>
+    </div>
+  )
+}
 
 export default function Parts() {
   const navigate = useNavigate()
   const [search, setSearch] = useState('')
   const [q, setQ] = useState('')
+  const [showNew, setShowNew] = useState(false)
 
   const { data, isLoading } = useQuery({
     queryKey: ['parts', q],
@@ -17,13 +121,16 @@ export default function Parts() {
   const parts = data?.items ?? []
 
   return (
-    <div className="p-8">
+    <div className="p-4 md:p-8">
+      {showNew && <NewPartModal onClose={() => setShowNew(false)} />}
+
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Estoque</h2>
           <p className="text-gray-500 text-sm mt-1">{data?.total ?? 0} peças cadastradas</p>
         </div>
-        <button className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+        <button onClick={() => setShowNew(true)}
+          className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
           <Plus size={16} /> Nova peça
         </button>
       </div>
