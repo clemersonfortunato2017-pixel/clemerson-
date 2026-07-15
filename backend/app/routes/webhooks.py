@@ -9,6 +9,8 @@ router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
 
 async def get_ml_order(order_id: str, access_token: str) -> dict:
+    if not access_token:
+        return {}
     async with httpx.AsyncClient(timeout=15) as client:
         r = await client.get(
             f"https://api.mercadolibre.com/orders/{order_id}",
@@ -57,8 +59,8 @@ async def ml_webhook(request: Request, db: Session = Depends(get_db)):
     if existing:
         return {"ok": True, "msg": "already processed"}
 
-    from app.services.ml_token import get_valid_token
-    access_token = await get_valid_token()
+    from app.services.ml_importer import get_valid_access_token
+    _, access_token = await get_valid_access_token(db)
     order = await get_ml_order(order_id, access_token)
 
     if not order or order.get("status") not in ("paid", "delivered"):
