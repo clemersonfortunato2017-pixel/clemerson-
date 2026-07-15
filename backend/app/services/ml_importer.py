@@ -3,13 +3,55 @@ import json
 import os
 from sqlalchemy.orm import Session
 from app.models.part import Part, MarketplaceListing, Vehicle, Compatibility
+from app.models.ml_credential import MLCredential
 
 ML_API = "https://api.mercadolibre.com"
 ML_TOKENS_FILE = r"F:\FORTUNATO AUTO PARTS\ml_tokens.json"
 BATCH_SIZE = 20
 
 
+async def get_valid_access_token(db: Session) -> tuple[str, str]:
+    """Sempre renova o access_token via refresh_token antes de usar (evita expirar em 6h).
+    O refresh_token mais recente fica salvo no banco (rotaciona a cada renovação)."""
+    from app.config import settings
+
+    cred = db.query(MLCredential).first()
+    refresh_token = (cred.refresh_token if cred else None) or settings.ml_refresh_token
+
+    if not refresh_token or not settings.ml_client_secret:
+        return settings.ml_user_id, cred.access_token if cred else settings.ml_access_token
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.post(
+            f"{ML_API}/oauth/token",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            data={
+                "grant_type": "refresh_token",
+                "client_id": settings.ml_app_id,
+                "client_secret": settings.ml_client_secret,
+                "refresh_token": refresh_token,
+            },
+        )
+        r.raise_for_status()
+        data = r.json()
+
+    new_access = data["access_token"]
+    new_refresh = data.get("refresh_token", refresh_token)
+    user_id = str(data.get("user_id") or settings.ml_user_id)
+
+    if cred:
+        cred.access_token = new_access
+        cred.refresh_token = new_refresh
+    else:
+        cred = MLCredential(access_token=new_access, refresh_token=new_refresh)
+        db.add(cred)
+    db.commit()
+
+    return user_id, new_access
+
+
 def get_ml_credentials():
+    """Legado: leitura estática (só usada como fallback caso a renovação via refresh_token falhe)."""
     if os.path.exists(ML_TOKENS_FILE):
         with open(ML_TOKENS_FILE, "r", encoding="utf-8-sig") as f:
             t = json.load(f)
@@ -142,7 +184,10 @@ async def sync_part_compatibility(part_id: int, listing_id: str, db: Session, he
 
 
 async def import_from_ml(db: Session) -> dict:
-    user_id, access_token = get_ml_credentials()
+    try:
+        user_id, access_token = await get_valid_access_token(db)
+    except Exception:
+        user_id, access_token = get_ml_credentials()
 
     if not user_id or not access_token:
         return {"error": "Credenciais do Mercado Livre não configuradas"}
