@@ -184,13 +184,15 @@ async def sync_part_compatibility(part_id: int, listing_id: str, db: Session, he
 
 
 async def import_from_ml(db: Session) -> dict:
+    debug_error = None
     try:
         user_id, access_token = await get_valid_access_token(db)
-    except Exception:
+    except Exception as e:
+        debug_error = f"{type(e).__name__}: {e}"
         user_id, access_token = get_ml_credentials()
 
     if not user_id or not access_token:
-        return {"error": "Credenciais do Mercado Livre não configuradas"}
+        return {"error": "Credenciais do Mercado Livre não configuradas", "debug": debug_error}
 
     headers = {"Authorization": f"Bearer {access_token}"}
 
