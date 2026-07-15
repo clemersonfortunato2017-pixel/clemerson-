@@ -19,11 +19,7 @@ async def get_valid_access_token(db: Session) -> tuple[str, str]:
     refresh_token = (cred.refresh_token if cred else None) or settings.ml_refresh_token
 
     if not refresh_token or not settings.ml_client_secret:
-        raise RuntimeError(
-            f"missing config: has_cred_row={bool(cred)} "
-            f"has_refresh={bool(refresh_token)} has_client_secret={bool(settings.ml_client_secret)} "
-            f"has_app_id={bool(settings.ml_app_id)} has_user_id={bool(settings.ml_user_id)}"
-        )
+        return settings.ml_user_id, cred.access_token if cred else settings.ml_access_token
 
     async with httpx.AsyncClient(timeout=30) as client:
         r = await client.post(
