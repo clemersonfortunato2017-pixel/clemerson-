@@ -22,11 +22,10 @@ except ImportError:
 
 TAMANHO_ALVO = (1000, 1000)
 QUALIDADE = 88
-# Downscale antes do rembg — foto de celular (12MP+) sem isso estourava a RAM
-# do container (confirmado: crash silencioso/OOM ao reprocessar a peça #446
-# com 8 fotos originais). Resultado final é 1000x1000 de qualquer forma, não
-# há ganho em manter resolução maior que isso pro rembg processar.
-MAX_ENTRADA = (1100, 1100)
+# Teto de entrada antes do rembg — só pra evitar caso extremo (foto de 48MP+),
+# não é mais um aperto de memória: com o plano Hobby (até 48GB/serviço) o
+# gargalo de RAM que forçou downscale agressivo + modelo leve não existe mais.
+MAX_ENTRADA = (2000, 2000)
 
 
 def _remover_fundo(img: Image.Image, session) -> Image.Image:
@@ -78,11 +77,13 @@ def processar_fotos_peca(part_id: int, arquivos_originais: list[Path], uploads_d
     todas as fotos do lote — carregar o modelo de novo a cada foto (8x numa
     peça) multiplicava a memória usada à toa."""
     saida_dir = uploads_dir / str(part_id) / "otimizadas"
-    # u2netp em vez de u2net: modelo ~40x menor (4.7MB vs 176MB) — o container
-    # do Railway está derrubando o processo por falta de memória mesmo com
-    # imagem reduzida e sessão reaproveitada (confirmado reproduzindo com
-    # fotos sintéticas de 12MP), então a saída é um modelo mais leve.
-    session = new_session("u2netp") if REMBG_OK else None
+    # u2net (modelo completo) — voltou depois do upgrade pro plano Hobby.
+    # u2netp (versão "lite", ~40x menor) foi usado temporariamente pra
+    # contornar falta de memória no plano trial, mas o recorte sai com
+    # contorno impreciso/borrado (relatado pelo Clemerson no anúncio do
+    # Ford Ka). Com RAM de sobra agora, não há razão pra manter a versão
+    # mais fraca.
+    session = new_session("u2net") if REMBG_OK else None
 
     resultados = []
     for origem in arquivos_originais:
