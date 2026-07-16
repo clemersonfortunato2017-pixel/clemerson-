@@ -1,8 +1,73 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { Search, Plus, Package, WifiOff, X } from 'lucide-react'
-import { getParts, createPart } from '../api'
+import { Search, Plus, Package, WifiOff, X, Camera, Loader2 } from 'lucide-react'
+import { getParts, createPart, uploadPhotos } from '../api'
+
+function PhotoUploadModal({ onClose }) {
+  const [files, setFiles] = useState([])
+  const [err, setErr] = useState('')
+  const qc = useQueryClient()
+
+  const mutation = useMutation({
+    mutationFn: uploadPhotos,
+    onSuccess: () => { qc.invalidateQueries(['parts']); onClose() },
+    onError: e => setErr(e?.response?.data?.detail || 'Erro ao enviar fotos'),
+  })
+
+  const submit = (e) => {
+    e.preventDefault()
+    if (files.length === 0) return setErr('Escolha ao menos uma foto')
+    setErr('')
+    mutation.mutate(files)
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative bg-white w-full md:max-w-lg md:rounded-2xl rounded-t-2xl p-6 max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between mb-5">
+          <h3 className="text-lg font-bold text-gray-900">Tirar/enviar foto da peça</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+        </div>
+
+        <p className="text-sm text-gray-500 mb-4">
+          A esteira automática identifica a peça, pesquisa compatibilidade/preço e publica
+          no Mercado Livre sozinha — sem revisão antes de publicar. Acompanhe no Relatório Diário.
+        </p>
+
+        <form onSubmit={submit} className="space-y-4">
+          <label className="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-gray-200 rounded-xl py-8 cursor-pointer hover:border-orange-400 transition-colors">
+            <Camera size={28} className="text-gray-400" />
+            <span className="text-sm text-gray-600">
+              {files.length > 0 ? `${files.length} foto(s) selecionada(s)` : 'Toque para tirar foto ou escolher da galeria'}
+            </span>
+            <input
+              type="file" multiple accept="image/*" capture="environment"
+              className="hidden"
+              onChange={(e) => setFiles(Array.from(e.target.files || []))}
+            />
+          </label>
+
+          {files.length > 0 && (
+            <div className="grid grid-cols-4 gap-2">
+              {files.map((f, i) => (
+                <img key={i} src={URL.createObjectURL(f)} alt="" className="w-full aspect-square object-cover rounded-lg border border-gray-200" />
+              ))}
+            </div>
+          )}
+
+          {err && <p className="text-red-500 text-sm">{err}</p>}
+
+          <button type="submit" disabled={mutation.isPending}
+            className="w-full flex items-center justify-center gap-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white py-3 rounded-lg font-medium transition-colors">
+            {mutation.isPending ? <><Loader2 size={16} className="animate-spin" /> Enviando...</> : 'Enviar pra esteira automática'}
+          </button>
+        </form>
+      </div>
+    </div>
+  )
+}
 
 const EMPTY = { title: '', code_internal: '', brand: '', condition: 'used', quantity: 1, sale_price: '', cost_price: '' }
 
@@ -112,6 +177,7 @@ export default function Parts() {
   const [search, setSearch] = useState('')
   const [q, setQ] = useState('')
   const [showNew, setShowNew] = useState(false)
+  const [showUpload, setShowUpload] = useState(false)
 
   const { data, isLoading } = useQuery({
     queryKey: ['parts', q],
@@ -123,16 +189,23 @@ export default function Parts() {
   return (
     <div className="p-4 md:p-8">
       {showNew && <NewPartModal onClose={() => setShowNew(false)} />}
+      {showUpload && <PhotoUploadModal onClose={() => setShowUpload(false)} />}
 
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Estoque</h2>
           <p className="text-gray-500 text-sm mt-1">{data?.total ?? 0} peças cadastradas</p>
         </div>
-        <button onClick={() => setShowNew(true)}
-          className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
-          <Plus size={16} /> Nova peça
-        </button>
+        <div className="flex gap-2">
+          <button onClick={() => setShowUpload(true)}
+            className="flex items-center gap-2 bg-gray-900 hover:bg-gray-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+            <Camera size={16} /> Tirar foto — anunciar sozinho
+          </button>
+          <button onClick={() => setShowNew(true)}
+            className="flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+            <Plus size={16} /> Nova peça
+          </button>
+        </div>
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -201,6 +274,14 @@ export default function Parts() {
                     {p.has_listings ? (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
                         Anunciado
+                      </span>
+                    ) : p.status === 'draft' || p.status === 'processing' ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+                        <Loader2 size={10} className="animate-spin" /> Na esteira automática
+                      </span>
+                    ) : p.status === 'error' ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                        Erro na esteira — ver relatório
                       </span>
                     ) : (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">

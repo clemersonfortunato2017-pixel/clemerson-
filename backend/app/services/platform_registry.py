@@ -38,7 +38,18 @@ class MercadoLivrePlatform(PlatformBase):
     name = "mercadolivre"
     display_name = "Mercado Livre"
 
-    def _get_token(self):
+    def _get_token(self, db: Session = None):
+        """Token ML: prioriza o Postgres (MLCredential, mantido fresco por
+        get_valid_access_token) — só cai pro HD externo F: se a migração de
+        credencial ainda não rodou. A esteira automática (rotina agendada)
+        sempre passa `db`, então nunca depende do F: em produção."""
+        if db is not None:
+            from app.models.ml_credential import MLCredential
+            cred = db.query(MLCredential).first()
+            if cred and cred.access_token:
+                from app.config import settings
+                return cred.access_token, settings.ml_user_id
+
         import json, os
         tokens_file = r"F:\FORTUNATO AUTO PARTS\ml_tokens.json"
         if os.path.exists(tokens_file):
@@ -53,11 +64,11 @@ class MercadoLivrePlatform(PlatformBase):
         return bool(token)
 
     async def publish(self, part: Part, db: Session) -> dict:
-        token, user_id = self._get_token()
+        token, user_id = self._get_token(db)
         if not token:
             return {"error": "ML não conectado"}
 
-        # Montar payload mínimo para criar anúncio
+        # Payload conforme regras fixas da skill anuncio-ml-autopecas (Passo 7)
         payload = {
             "title": part.title[:60],
             "category_id": part.category or "MLB3937",  # categoria genérica autopeças
@@ -65,8 +76,9 @@ class MercadoLivrePlatform(PlatformBase):
             "currency_id": "BRL",
             "available_quantity": max(part.quantity, 1),
             "buying_mode": "buy_it_now",
-            "listing_type_id": "gold_special",
+            "listing_type_id": "gold_pro",
             "condition": "new" if part.condition == "new" else "used",
+            "shipping": {"free_shipping": True},
             "pictures": [{"source": url} for url in (part.photos or [])[:12]],
         }
 

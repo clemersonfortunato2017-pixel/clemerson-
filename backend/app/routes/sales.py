@@ -7,8 +7,9 @@ from datetime import datetime
 from app.database import get_db
 from app.models.sale import Sale, SaleItem
 from app.models.part import Part, StockMovement
+from app.routes.auth import get_current_user
 
-router = APIRouter(prefix="/sales", tags=["sales"])
+router = APIRouter(prefix="/sales", tags=["sales"], dependencies=[Depends(get_current_user)])
 
 PLATFORM_FEES = {
     "mercadolivre": 14.0,

@@ -2,6 +2,40 @@ import axios from 'axios'
 
 const api = axios.create({ baseURL: import.meta.env.VITE_API_URL || '/api' })
 
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('pitbox_token')
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})
+
+api.interceptors.response.use(
+  (r) => r,
+  (error) => {
+    if (error.response?.status === 401) {
+      localStorage.removeItem('pitbox_token')
+      localStorage.removeItem('pitbox_user')
+      if (location.pathname !== '/login') location.href = '/login'
+    }
+    return Promise.reject(error)
+  }
+)
+
+// Auth
+export const login = (data) => api.post('/auth/login', data).then(r => r.data)
+export const register = (data) => api.post('/auth/register', data).then(r => r.data)
+export const getMe = () => api.get('/auth/me').then(r => r.data)
+export const getPendingUsers = () => api.get('/auth/pending').then(r => r.data)
+export const approveUser = (id) => api.post(`/auth/${id}/approve`).then(r => r.data)
+export const rejectUser = (id) => api.post(`/auth/${id}/reject`).then(r => r.data)
+
+// Esteira automática
+export const uploadPhotos = (files) => {
+  const form = new FormData()
+  files.forEach((f) => form.append('files', f))
+  return api.post('/parts/upload-photos', form, { headers: { 'Content-Type': 'multipart/form-data' } }).then(r => r.data)
+}
+export const getDailyReport = (date) => api.get('/reports/daily', { params: date ? { date } : {} }).then(r => r.data)
+
 export const getParts = (params) => api.get('/parts/', { params }).then(r => r.data)
 export const getPart = (id) => api.get(`/parts/${id}`).then(r => r.data)
 export const createPart = (data) => api.post('/parts/', data).then(r => r.data)

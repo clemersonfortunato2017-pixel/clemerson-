@@ -6,8 +6,9 @@ from app.services.platform_registry import (
     close_on_all_platforms, publish_to_all_platforms,
     PLATFORMS, get_connected_platforms,
 )
+from app.routes.auth import get_current_user
 
-router = APIRouter(prefix="/platforms", tags=["platforms"])
+router = APIRouter(prefix="/platforms", tags=["platforms"], dependencies=[Depends(get_current_user)])
 
 
 @router.get("/status")

@@ -34,6 +34,9 @@ class Part(Base):
     photos = Column(JSON, default=list)
     notes = Column(Text)
     active = Column(Boolean, default=True)
+    # Esteira automática de anúncio (upload de foto -> publicação sem revisão humana)
+    status = Column(String(20), default="draft")  # draft, processing, published, error
+    pipeline_log = Column(JSON, default=list)      # histórico de etapas/decisões/erros da esteira
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

@@ -5,8 +5,9 @@ from typing import Optional
 from pydantic import BaseModel
 from app.database import get_db
 from app.models.part import Vehicle, Compatibility, Part
+from app.routes.auth import get_current_user
 
-router = APIRouter(prefix="/compatibility", tags=["compatibility"])
+router = APIRouter(prefix="/compatibility", tags=["compatibility"], dependencies=[Depends(get_current_user)])
 
 
 class VehicleCreate(BaseModel):

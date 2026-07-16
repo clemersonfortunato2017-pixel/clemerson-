@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { Routes, Route, NavLink, useNavigate } from 'react-router-dom'
-import { Package, LayoutDashboard, Download, DollarSign, Search, Car, ShoppingCart, BarChart2, Menu, X } from 'lucide-react'
+import { Routes, Route, Navigate, NavLink, useNavigate, useLocation } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
+import { Package, LayoutDashboard, Download, DollarSign, Search, Car, ShoppingCart, BarChart2, Menu, X, Camera, Users, LogOut } from 'lucide-react'
 import Dashboard from './pages/Dashboard'
 import Parts from './pages/Parts'
 import Import from './pages/Import'
@@ -10,20 +11,55 @@ import PartDetail from './pages/PartDetail'
 import VehicleSearch from './pages/VehicleSearch'
 import PDV from './pages/PDV'
 import AbcCurve from './pages/AbcCurve'
-
-const nav = [
-  { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/pdv', icon: ShoppingCart, label: 'PDV' },
-  { to: '/parts', icon: Package, label: 'Estoque' },
-  { to: '/search', icon: Search, label: 'Busca Rápida' },
-  { to: '/vehicle', icon: Car, label: 'Por Veículo' },
-  { to: '/financial', icon: DollarSign, label: 'Financeiro' },
-  { to: '/abc', icon: BarChart2, label: 'Curva ABC' },
-  { to: '/import', icon: Download, label: 'Importar' },
-]
+import Login from './pages/Login'
+import PendingUsers from './pages/PendingUsers'
+import DailyReport from './pages/DailyReport'
+import { getPendingUsers } from './api'
 
 export default function App() {
   const [open, setOpen] = useState(false)
+  const location = useLocation()
+  const navigate = useNavigate()
+  const isLoginPage = location.pathname === '/login'
+  const token = localStorage.getItem('pitbox_token')
+  const user = JSON.parse(localStorage.getItem('pitbox_user') || 'null')
+  const isAdmin = user?.role === 'admin'
+
+  const { data: pending = [] } = useQuery({
+    queryKey: ['pending-users'],
+    queryFn: getPendingUsers,
+    enabled: isAdmin && !isLoginPage,
+    refetchInterval: 20000,
+  })
+
+  const logout = () => {
+    localStorage.removeItem('pitbox_token')
+    localStorage.removeItem('pitbox_user')
+    navigate('/login')
+  }
+
+  if (isLoginPage) {
+    return (
+      <Routes>
+        <Route path="/login" element={<Login />} />
+      </Routes>
+    )
+  }
+
+  if (!token) return <Navigate to="/login" replace />
+
+  const nav = [
+    { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
+    { to: '/pdv', icon: ShoppingCart, label: 'PDV' },
+    { to: '/parts', icon: Package, label: 'Estoque' },
+    { to: '/relatorio-diario', icon: Camera, label: 'Esteira automática' },
+    { to: '/search', icon: Search, label: 'Busca Rápida' },
+    { to: '/vehicle', icon: Car, label: 'Por Veículo' },
+    { to: '/financial', icon: DollarSign, label: 'Financeiro' },
+    { to: '/abc', icon: BarChart2, label: 'Curva ABC' },
+    { to: '/import', icon: Download, label: 'Importar' },
+    ...(isAdmin ? [{ to: '/usuarios-pendentes', icon: Users, label: 'Usuários', badge: pending.length }] : []),
+  ]
 
   return (
     <div className="flex h-screen bg-gray-50">
@@ -34,19 +70,23 @@ export default function App() {
           <p className="text-gray-400 text-xs mt-0.5">Gestão de Autopeças</p>
         </div>
         <nav className="flex-1 px-3 py-4 space-y-1">
-          {nav.map(({ to, icon: Icon, label }) => (
+          {nav.map(({ to, icon: Icon, label, badge }) => (
             <NavLink key={to} to={to} end={to === '/'}
               className={({ isActive }) =>
                 `flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
                   isActive ? 'bg-orange-500 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800'
                 }`
               }>
-              <Icon size={16} />{label}
+              <Icon size={16} /><span className="flex-1">{label}</span>
+              {!!badge && <span className="bg-red-500 text-white text-[10px] font-bold rounded-full px-1.5 py-0.5">{badge}</span>}
             </NavLink>
           ))}
         </nav>
         <div className="px-4 py-3 border-t border-gray-800">
-          <p className="text-gray-500 text-xs">Fortunato Auto Parts</p>
+          <p className="text-gray-500 text-xs mb-2">{user?.name || 'Fortunato Auto Parts'}</p>
+          <button onClick={logout} className="flex items-center gap-2 text-gray-400 hover:text-white text-xs">
+            <LogOut size={13} /> Sair
+          </button>
         </div>
       </aside>
 
@@ -76,7 +116,7 @@ export default function App() {
                 </button>
               </div>
               <nav className="flex-1 px-3 py-4 space-y-1">
-                {nav.map(({ to, icon: Icon, label }) => (
+                {nav.map(({ to, icon: Icon, label, badge }) => (
                   <NavLink key={to} to={to} end={to === '/'}
                     onClick={() => setOpen(false)}
                     className={({ isActive }) =>
@@ -84,12 +124,16 @@ export default function App() {
                         isActive ? 'bg-orange-500 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800'
                       }`
                     }>
-                    <Icon size={16} />{label}
+                    <Icon size={16} /><span className="flex-1">{label}</span>
+                    {!!badge && <span className="bg-red-500 text-white text-[10px] font-bold rounded-full px-1.5 py-0.5">{badge}</span>}
                   </NavLink>
                 ))}
               </nav>
               <div className="px-4 py-3 border-t border-gray-800">
-                <p className="text-gray-500 text-xs">Fortunato Auto Parts</p>
+                <p className="text-gray-500 text-xs mb-2">{user?.name || 'Fortunato Auto Parts'}</p>
+                <button onClick={logout} className="flex items-center gap-2 text-gray-400 hover:text-white text-xs">
+                  <LogOut size={13} /> Sair
+                </button>
               </div>
             </div>
             <div className="flex-1 bg-black bg-opacity-50" onClick={() => setOpen(false)} />
@@ -107,6 +151,8 @@ export default function App() {
             <Route path="/financial" element={<Financial />} />
             <Route path="/abc" element={<AbcCurve />} />
             <Route path="/import" element={<Import />} />
+            <Route path="/relatorio-diario" element={<DailyReport />} />
+            <Route path="/usuarios-pendentes" element={<PendingUsers />} />
           </Routes>
         </main>
       </div>

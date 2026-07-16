@@ -1,12 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from pathlib import Path
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, BackgroundTasks
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
 from typing import Optional
 from pydantic import BaseModel
-from app.database import get_db
+from app.database import get_db, SessionLocal
 from app.models.part import Part, StockMovement, Compatibility
+from app.config import settings
+from app.routes.auth import get_current_user
 
-router = APIRouter(prefix="/parts", tags=["parts"])
+router = APIRouter(prefix="/parts", tags=["parts"], dependencies=[Depends(get_current_user)])
 
 
 class PartCreate(BaseModel):
@@ -64,11 +67,82 @@ def _calc_margin(part: Part):
         part.margin_percent = round(((part.sale_price - part.cost_price) / part.cost_price) * 100, 2)
 
 
+def _log_step(part: Part, step: str, detail: str = ""):
+    log = list(part.pipeline_log or [])
+    log.append({"step": step, "detail": detail})
+    part.pipeline_log = log
+
+
+def _process_photos_background(part_id: int, originais_paths: list[str]):
+    """Roda fora do request (BackgroundTasks): otimiza as fotos e marca a peça
+    como pronta pra esteira automática (Passo A3) pegar e publicar."""
+    from app.services.image_processor import processar_fotos_peca
+
+    db = SessionLocal()
+    try:
+        part = db.query(Part).filter(Part.id == part_id).first()
+        if not part:
+            return
+        try:
+            otimizadas = processar_fotos_peca(
+                part_id, [Path(p) for p in originais_paths], Path(settings.uploads_dir)
+            )
+            part.photos = otimizadas
+            part.status = "draft"  # pronta p/ a rotina agendada (Passo A3) identificar e publicar
+            _log_step(part, "otimizacao_foto", f"{len(otimizadas)} foto(s) otimizada(s)")
+        except Exception as e:
+            part.status = "error"
+            _log_step(part, "otimizacao_foto", f"erro: {e}")
+        db.commit()
+    finally:
+        db.close()
+
+
+@router.post("/upload-photos")
+async def upload_photos(
+    background_tasks: BackgroundTasks,
+    files: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+):
+    """Recebe fotos tiradas/enviadas no Pitbox, cria a peça em status=draft e
+    dispara a otimização de imagem em background. A identificação da peça,
+    pesquisa de compatibilidade/concorrentes e publicação no Mercado Livre
+    ficam por conta da rotina agendada (esteira automática), não deste endpoint."""
+    if not files:
+        raise HTTPException(status_code=400, detail="Nenhuma foto enviada")
+
+    part = Part(
+        title="Peça aguardando identificação",
+        status="processing",
+        photos=[],
+        pipeline_log=[{"step": "upload", "detail": f"{len(files)} foto(s) recebida(s)"}],
+    )
+    db.add(part)
+    db.flush()
+
+    originais_dir = Path(settings.uploads_dir) / str(part.id) / "originais"
+    originais_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_paths = []
+    for f in files:
+        dest = originais_dir / f.filename
+        dest.write_bytes(await f.read())
+        saved_paths.append(str(dest))
+
+    db.commit()
+    db.refresh(part)
+
+    background_tasks.add_task(_process_photos_background, part.id, saved_paths)
+
+    return {"id": part.id, "status": part.status, "photos_received": len(files)}
+
+
 @router.get("/")
 def list_parts(
     q: Optional[str] = Query(None),
     category: Optional[str] = None,
     condition: Optional[str] = None,
+    status: Optional[str] = None,
     low_stock: bool = False,
     skip: int = 0,
     limit: int = 50,
@@ -76,6 +150,8 @@ def list_parts(
 ):
     query = db.query(Part).filter(Part.active == True)
 
+    if status:
+        query = query.filter(Part.status == status)
     if q:
         query = query.filter(
             or_(

@@ -3,8 +3,9 @@ from sqlalchemy.orm import Session
 from app.database import get_db, SessionLocal
 from app.services.ml_importer import import_from_ml, sync_all_compatibility
 from app.services.title_compat_parser import sync_compat_from_titles
+from app.routes.auth import get_current_user
 
-router = APIRouter(prefix="/import", tags=["import"])
+router = APIRouter(prefix="/import", tags=["import"], dependencies=[Depends(get_current_user)])
 
 # Estado simples do job de sync em memória
 sync_state = {"running": False, "processed": 0, "added": 0, "done": False, "error": None}

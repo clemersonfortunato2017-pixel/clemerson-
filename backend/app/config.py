@@ -8,6 +8,9 @@ class Settings(BaseSettings):
     ml_refresh_token: str = ""
     ml_user_id: str = ""
     secret_key: str = "dev-secret"
+    internal_service_key: str = ""  # chave máquina-a-máquina p/ rotina agendada (não é login de usuário)
+    uploads_dir: str = "/data/uploads"
+    public_base_url: str = "https://clemerson-production.up.railway.app"  # p/ montar URL pública das fotos (ML exige URL absoluta)
 
     class Config:
         env_file = ".env"
