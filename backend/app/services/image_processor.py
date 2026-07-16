@@ -4,8 +4,14 @@ antes rodava no PC do usuário, agora roda no backend (BackgroundTasks) pra
 peça publicada pela esteira automática não depender de nada local."""
 
 import io
+import os
 from pathlib import Path
 from PIL import Image
+from app.config import settings
+
+# Cache do modelo do rembg no volume persistente — sem isso, cada restart do
+# container baixava os 176MB de novo (disco padrão do container é efêmero).
+os.environ.setdefault("U2NET_HOME", str(Path(settings.uploads_dir) / ".u2net"))
 
 try:
     from rembg import remove as rembg_remove
@@ -15,6 +21,7 @@ except ImportError:
 
 TAMANHO_ALVO = (1000, 1000)
 QUALIDADE = 88
+MAX_ENTRADA = (1600, 1600)  # downscale antes do rembg — foto de celular (12MP+) sem isso estourava a RAM do container
 
 
 def _remover_fundo(img: Image.Image) -> Image.Image:
@@ -31,6 +38,7 @@ def otimizar_imagem(origem: Path, destino: Path) -> Path:
     """Remove fundo, centraliza em canvas 1000x1000 branco, salva JPEG <10MB."""
     with Image.open(origem) as img:
         img = img.convert("RGB")
+        img.thumbnail(MAX_ENTRADA, Image.LANCZOS)  # reduz antes de gastar RAM no rembg — resultado final é 1000x1000 mesmo assim
         img_sem_fundo = _remover_fundo(img)
 
         fundo = Image.new("RGBA", img_sem_fundo.size, (255, 255, 255, 255))
@@ -58,8 +66,6 @@ def processar_fotos_peca(part_id: int, arquivos_originais: list[Path], uploads_d
     """Processa todas as fotos originais de uma peça, retorna URLs públicas
     completas das otimizadas (o ML exige URL absoluta em `pictures[].source`,
     não aceita path relativo)."""
-    from app.config import settings
-
     saida_dir = uploads_dir / str(part_id) / "otimizadas"
     resultados = []
     for origem in arquivos_originais:
