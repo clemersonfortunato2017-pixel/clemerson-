@@ -26,6 +26,19 @@ def require_service_key(x_service_key: str = Header(default="")):
         raise HTTPException(status_code=401, detail="Chave de serviço inválida ou ausente")
 
 
+@router.get("/parts/pending", dependencies=[Depends(require_service_key)])
+def list_pending_parts(db: Session = Depends(get_db)):
+    """Peças com foto já otimizada aguardando a esteira (status=draft) — é
+    o que a rotina agendada consulta a cada execução pra saber se tem
+    trabalho novo. draft = otimização de foto concluída (ver Passo A2);
+    processing = upload ainda sendo processado, não pegar ainda."""
+    parts = db.query(Part).filter(Part.status == "draft").order_by(Part.created_at.asc()).all()
+    return [
+        {"id": p.id, "title": p.title, "photos": p.photos, "created_at": p.created_at}
+        for p in parts
+    ]
+
+
 @router.get("/ml-token", dependencies=[Depends(require_service_key)])
 async def get_ml_token(db: Session = Depends(get_db)):
     """Token ML sempre fresco (renova via refresh_token se preciso) — usado pela
