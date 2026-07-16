@@ -1,11 +1,20 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getPendingUsers, approveUser, rejectUser, inviteUser } from '../api'
-import { UserCheck, UserX, Clock, UserPlus, Copy, Share2, Check } from 'lucide-react'
+import { UserCheck, UserX, Clock, UserPlus, Copy, Share2, Check, MessageCircle } from 'lucide-react'
+
+// Deixa só dígitos e assume DDI 55 (Brasil) quando a pessoa digitou sem código do país
+function sanitizePhone(raw) {
+  const digits = raw.replace(/\D/g, '')
+  if (!digits) return ''
+  if (digits.length <= 11) return `55${digits}`
+  return digits
+}
 
 function InvitePanel() {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
+  const [phone, setPhone] = useState('')
   const [link, setLink] = useState('')
   const [copied, setCopied] = useState(false)
   const [err, setErr] = useState('')
@@ -41,7 +50,16 @@ function InvitePanel() {
     }
   }
 
-  const novoConvite = () => { setLink(''); setName(''); setEmail('') }
+  const sendWhatsApp = () => {
+    const texto = `Oi ${name}! Liberei seu acesso ao Pitbox. Só entrar nesse link e criar sua senha:\n${link}`
+    const numero = sanitizePhone(phone)
+    const url = numero
+      ? `https://wa.me/${numero}?text=${encodeURIComponent(texto)}`
+      : `https://wa.me/?text=${encodeURIComponent(texto)}`
+    window.open(url, '_blank')
+  }
+
+  const novoConvite = () => { setLink(''); setName(''); setEmail(''); setPhone('') }
 
   return (
     <div className="bg-white border border-gray-100 rounded-xl p-5 shadow-sm mb-6">
@@ -65,6 +83,11 @@ function InvitePanel() {
             onChange={(e) => setEmail(e.target.value)}
             className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
           />
+          <input
+            type="tel" placeholder="WhatsApp da pessoa (com DDD) — opcional" value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+          />
           {err && <p className="text-red-500 text-sm">{err}</p>}
           <button type="submit" disabled={mutation.isPending}
             className="w-full bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white font-medium rounded-lg px-3 py-2.5 text-sm transition-colors">
@@ -80,6 +103,10 @@ function InvitePanel() {
           <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
             <input readOnly value={link} className="flex-1 bg-transparent text-xs text-gray-600 outline-none" />
           </div>
+          <button onClick={sendWhatsApp}
+            className="w-full flex items-center justify-center gap-2 bg-green-500 hover:bg-green-600 text-white text-sm font-medium py-2.5 rounded-lg">
+            <MessageCircle size={16} /> Enviar por WhatsApp
+          </button>
           <div className="flex gap-2">
             <button onClick={shareLink}
               className="flex-1 flex items-center justify-center gap-2 bg-gray-900 hover:bg-gray-700 text-white text-sm font-medium py-2.5 rounded-lg">
