@@ -4,6 +4,8 @@ import { useNavigate } from 'react-router-dom'
 import { Search, Plus, Package, WifiOff, X, Camera, Loader2 } from 'lucide-react'
 import { getParts, createPart, uploadPhotos } from '../api'
 
+const MIN_PHOTOS = 6 // mais que 5, por pedido do Clemerson — evita anúncio com peça mal fotografada
+
 function PhotoUploadModal({ onClose }) {
   const [files, setFiles] = useState([])
   const [err, setErr] = useState('')
@@ -11,14 +13,17 @@ function PhotoUploadModal({ onClose }) {
 
   const mutation = useMutation({
     mutationFn: uploadPhotos,
-    onSuccess: () => { qc.invalidateQueries(['parts']); onClose() },
+    onSuccess: () => { qc.invalidateQueries(['parts']); setFiles([]); onClose() },
     onError: e => setErr(e?.response?.data?.detail || 'Erro ao enviar fotos'),
   })
 
   const submit = (e) => {
     e.preventDefault()
-    if (files.length === 0) return setErr('Escolha ao menos uma foto')
+    if (files.length < MIN_PHOTOS) {
+      return setErr(`Envie no mínimo ${MIN_PHOTOS} fotos desta peça (${files.length} selecionada${files.length === 1 ? '' : 's'} até agora).`)
+    }
     setErr('')
+    if (!window.confirm('Tem certeza que deseja anunciar esta peça?')) return
     mutation.mutate(files)
   }
 
@@ -35,12 +40,17 @@ function PhotoUploadModal({ onClose }) {
           A esteira automática identifica a peça, pesquisa compatibilidade/preço e publica
           no Mercado Livre sozinha — sem revisão antes de publicar. Acompanhe no Relatório Diário.
         </p>
+        <p className="text-sm font-medium text-orange-600 mb-4">
+          Obrigatório: no mínimo {MIN_PHOTOS} fotos desta peça, de ângulos diferentes.
+        </p>
 
         <form onSubmit={submit} className="space-y-4">
           <label className="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-gray-200 rounded-xl py-8 cursor-pointer hover:border-orange-400 transition-colors">
             <Camera size={28} className="text-gray-400" />
             <span className="text-sm text-gray-600">
-              {files.length > 0 ? `${files.length} foto(s) selecionada(s)` : 'Toque para tirar foto ou escolher da galeria'}
+              {files.length > 0
+                ? `${files.length}/${MIN_PHOTOS} foto(s) selecionada(s)${files.length >= MIN_PHOTOS ? ' — pronto' : ''}`
+                : 'Toque para tirar foto ou escolher da galeria'}
             </span>
             <input
               type="file" multiple accept="image/*" capture="environment"

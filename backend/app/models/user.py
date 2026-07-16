@@ -15,3 +15,5 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     approved_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     approved_at = Column(DateTime(timezone=True), nullable=True)
+    invite_token = Column(String(64), unique=True, nullable=True)  # convite instantâneo do admin, some depois de usado
+    google_id = Column(String(64), unique=True, nullable=True)

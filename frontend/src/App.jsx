@@ -14,13 +14,16 @@ import AbcCurve from './pages/AbcCurve'
 import Login from './pages/Login'
 import PendingUsers from './pages/PendingUsers'
 import DailyReport from './pages/DailyReport'
+import AcceptInvite from './pages/AcceptInvite'
 import { getPendingUsers } from './api'
+
+const PUBLIC_PATHS = ['/login', '/aceitar-convite']
 
 export default function App() {
   const [open, setOpen] = useState(false)
   const location = useLocation()
   const navigate = useNavigate()
-  const isLoginPage = location.pathname === '/login'
+  const isPublicPage = PUBLIC_PATHS.includes(location.pathname)
   const token = localStorage.getItem('pitbox_token')
   const user = JSON.parse(localStorage.getItem('pitbox_user') || 'null')
   const isAdmin = user?.role === 'admin'
@@ -28,7 +31,7 @@ export default function App() {
   const { data: pending = [] } = useQuery({
     queryKey: ['pending-users'],
     queryFn: getPendingUsers,
-    enabled: isAdmin && !isLoginPage,
+    enabled: isAdmin && !isPublicPage,
     refetchInterval: 20000,
   })
 
@@ -38,10 +41,11 @@ export default function App() {
     navigate('/login')
   }
 
-  if (isLoginPage) {
+  if (isPublicPage) {
     return (
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/aceitar-convite" element={<AcceptInvite />} />
       </Routes>
     )
   }

@@ -27,6 +27,9 @@ export const getMe = () => api.get('/auth/me').then(r => r.data)
 export const getPendingUsers = () => api.get('/auth/pending').then(r => r.data)
 export const approveUser = (id) => api.post(`/auth/${id}/approve`).then(r => r.data)
 export const rejectUser = (id) => api.post(`/auth/${id}/reject`).then(r => r.data)
+export const inviteUser = (data) => api.post('/auth/invite', data).then(r => r.data)
+export const acceptInvite = (data) => api.post('/auth/accept-invite', data).then(r => r.data)
+export const loginWithGoogle = (credential) => api.post('/auth/google', { credential }).then(r => r.data)
 
 // Esteira automática
 export const uploadPhotos = (files) => {

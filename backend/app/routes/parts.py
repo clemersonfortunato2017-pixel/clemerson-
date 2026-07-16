@@ -108,8 +108,9 @@ async def upload_photos(
     dispara a otimização de imagem em background. A identificação da peça,
     pesquisa de compatibilidade/concorrentes e publicação no Mercado Livre
     ficam por conta da rotina agendada (esteira automática), não deste endpoint."""
-    if not files:
-        raise HTTPException(status_code=400, detail="Nenhuma foto enviada")
+    MIN_PHOTOS = 6  # mais que 5, por pedido do Clemerson — não confiar só na trava do frontend
+    if len(files) < MIN_PHOTOS:
+        raise HTTPException(status_code=400, detail=f"Envie no mínimo {MIN_PHOTOS} fotos da peça (recebi {len(files)}).")
 
     part = Part(
         title="Peça aguardando identificação",
