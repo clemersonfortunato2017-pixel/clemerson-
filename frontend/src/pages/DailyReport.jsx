@@ -1,12 +1,14 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { getDailyReport } from '../api'
-import { CheckCircle2, XCircle, Calendar } from 'lucide-react'
+import { CheckCircle2, XCircle, Calendar, Camera } from 'lucide-react'
+import PhotoUploadModal from '../components/PhotoUploadModal'
 
 const todayStr = () => new Date().toISOString().slice(0, 10)
 
 export default function DailyReport() {
   const [date, setDate] = useState(todayStr())
+  const [showUpload, setShowUpload] = useState(false)
   const { data, isLoading } = useQuery({
     queryKey: ['daily-report', date],
     queryFn: () => getDailyReport(date),
@@ -14,11 +16,22 @@ export default function DailyReport() {
 
   return (
     <div className="p-6 max-w-3xl">
-      <div className="flex items-center justify-between mb-6">
+      {showUpload && <PhotoUploadModal onClose={() => setShowUpload(false)} />}
+
+      <div className="flex items-center justify-between mb-4">
         <div>
-          <h1 className="text-lg font-bold text-gray-900">Relatório diário — esteira automática</h1>
-          <p className="text-gray-500 text-sm">O que foi identificado, pesquisado e publicado sozinho no Mercado Livre.</p>
+          <h1 className="text-lg font-bold text-gray-900">Esteira automática</h1>
+          <p className="text-gray-500 text-sm">Tire foto de uma peça pra publicar sozinha, e acompanhe o que já saiu hoje.</p>
         </div>
+      </div>
+
+      <button onClick={() => setShowUpload(true)}
+        className="w-full md:w-auto flex items-center justify-center gap-2 bg-orange-500 hover:bg-orange-600 text-white px-5 py-3 rounded-lg text-sm font-medium transition-colors mb-6">
+        <Camera size={18} /> Tirar foto — anunciar sozinho
+      </button>
+
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-sm font-semibold text-gray-700">Relatório do dia</h2>
         <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-1.5">
           <Calendar size={14} className="text-gray-400" />
           <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="text-sm outline-none" />
