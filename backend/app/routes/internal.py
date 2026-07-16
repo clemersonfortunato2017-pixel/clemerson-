@@ -39,6 +39,30 @@ def list_pending_parts(db: Session = Depends(get_db)):
     ]
 
 
+@router.post("/parts/{part_id}/reprocess", dependencies=[Depends(require_service_key)])
+def reprocess_stuck_part(part_id: int, db: Session = Depends(get_db)):
+    """Recupera peça travada em status=processing (ex: deploy do backend
+    reiniciou o servidor no meio da otimização de foto). As fotos originais
+    continuam no volume persistente — só reprocessa a partir delas."""
+    from pathlib import Path
+    from app.routes.parts import _process_photos
+
+    part = db.query(Part).filter(Part.id == part_id).first()
+    if not part:
+        raise HTTPException(status_code=404, detail="Peça não encontrada")
+
+    originais_dir = Path(settings.uploads_dir) / str(part_id) / "originais"
+    if not originais_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Sem fotos originais salvas em {originais_dir}")
+
+    originais_paths = [str(p) for p in sorted(originais_dir.iterdir()) if p.is_file()]
+    if not originais_paths:
+        raise HTTPException(status_code=404, detail="Pasta de originais vazia")
+
+    _process_photos(part, originais_paths, db)
+    return {"id": part.id, "status": part.status, "photos": part.photos}
+
+
 @router.get("/ml-token", dependencies=[Depends(require_service_key)])
 async def get_ml_token(db: Session = Depends(get_db)):
     """Token ML sempre fresco (renova via refresh_token se preciso) — usado pela

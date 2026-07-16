@@ -1,10 +1,10 @@
 from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
 from typing import Optional
 from pydantic import BaseModel
-from app.database import get_db, SessionLocal
+from app.database import get_db
 from app.models.part import Part, StockMovement, Compatibility
 from app.config import settings
 from app.routes.auth import get_current_user
@@ -73,41 +73,37 @@ def _log_step(part: Part, step: str, detail: str = ""):
     part.pipeline_log = log
 
 
-def _process_photos_background(part_id: int, originais_paths: list[str]):
-    """Roda fora do request (BackgroundTasks): otimiza as fotos e marca a peça
-    como pronta pra esteira automática (Passo A3) pegar e publicar."""
+def _process_photos(part: Part, originais_paths: list[str], db: Session):
+    """Otimiza as fotos e marca a peça como pronta pra esteira automática
+    (Passo A3) pegar e publicar. Roda SÍNCRONO dentro do próprio request de
+    upload — rodar em BackgroundTasks deixava a peça travada em 'processing'
+    pra sempre se um deploy reiniciasse o servidor no meio do processamento
+    (aconteceu na prática em 2026-07-16, peça #446)."""
     from app.services.image_processor import processar_fotos_peca
 
-    db = SessionLocal()
     try:
-        part = db.query(Part).filter(Part.id == part_id).first()
-        if not part:
-            return
-        try:
-            otimizadas = processar_fotos_peca(
-                part_id, [Path(p) for p in originais_paths], Path(settings.uploads_dir)
-            )
-            part.photos = otimizadas
-            part.status = "draft"  # pronta p/ a rotina agendada (Passo A3) identificar e publicar
-            _log_step(part, "otimizacao_foto", f"{len(otimizadas)} foto(s) otimizada(s)")
-        except Exception as e:
-            part.status = "error"
-            _log_step(part, "otimizacao_foto", f"erro: {e}")
-        db.commit()
-    finally:
-        db.close()
+        otimizadas = processar_fotos_peca(
+            part.id, [Path(p) for p in originais_paths], Path(settings.uploads_dir)
+        )
+        part.photos = otimizadas
+        part.status = "draft"  # pronta p/ a rotina agendada (Passo A3) identificar e publicar
+        _log_step(part, "otimizacao_foto", f"{len(otimizadas)} foto(s) otimizada(s)")
+    except Exception as e:
+        part.status = "error"
+        _log_step(part, "otimizacao_foto", f"erro: {e}")
+    db.commit()
 
 
 @router.post("/upload-photos")
 async def upload_photos(
-    background_tasks: BackgroundTasks,
     files: list[UploadFile] = File(...),
     db: Session = Depends(get_db),
 ):
-    """Recebe fotos tiradas/enviadas no Pitbox, cria a peça em status=draft e
-    dispara a otimização de imagem em background. A identificação da peça,
-    pesquisa de compatibilidade/concorrentes e publicação no Mercado Livre
-    ficam por conta da rotina agendada (esteira automática), não deste endpoint."""
+    """Recebe fotos tiradas/enviadas no Pitbox, cria a peça e otimiza as fotos
+    (remove fundo, 1000x1000) antes de responder — processamento síncrono de
+    propósito, ver _process_photos. A identificação da peça, pesquisa de
+    compatibilidade/concorrentes e publicação no Mercado Livre ficam por
+    conta da rotina agendada (esteira automática), não deste endpoint."""
     MIN_PHOTOS = 6  # mais que 5, por pedido do Clemerson — não confiar só na trava do frontend
     if len(files) < MIN_PHOTOS:
         raise HTTPException(status_code=400, detail=f"Envie no mínimo {MIN_PHOTOS} fotos da peça (recebi {len(files)}).")
@@ -133,7 +129,7 @@ async def upload_photos(
     db.commit()
     db.refresh(part)
 
-    background_tasks.add_task(_process_photos_background, part.id, saved_paths)
+    _process_photos(part, saved_paths, db)
 
     return {"id": part.id, "status": part.status, "photos_received": len(files)}
 
