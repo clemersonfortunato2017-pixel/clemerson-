@@ -121,8 +121,13 @@ async def upload_photos(
     originais_dir.mkdir(parents=True, exist_ok=True)
 
     saved_paths = []
-    for f in files:
-        dest = originais_dir / f.filename
+    for i, f in enumerate(files):
+        # Prefixo de índice — o celular manda o mesmo nome (ex: "image.jpg")
+        # pra cada foto tirada, e sem isso cada uma sobrescrevia a anterior
+        # no disco antes de processar (confirmado: peça #446 recebeu 8 fotos,
+        # só 1 sobreviveu).
+        sufixo = Path(f.filename or "foto.jpg").suffix or ".jpg"
+        dest = originais_dir / f"{i:02d}{sufixo}"
         dest.write_bytes(await f.read())
         saved_paths.append(str(dest))
 
