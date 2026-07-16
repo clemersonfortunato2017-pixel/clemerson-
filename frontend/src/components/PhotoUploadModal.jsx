@@ -54,7 +54,14 @@ export default function PhotoUploadModal({ onClose }) {
             <input
               type="file" multiple accept="image/*" capture="environment"
               className="hidden"
-              onChange={(e) => setFiles(Array.from(e.target.files || []))}
+              onChange={(e) => {
+                // A câmera do celular abre uma foto por vez e o input troca o
+                // FileList inteiro a cada captura — sem acumular aqui, cada
+                // foto nova apagava a anterior.
+                const novasFotos = Array.from(e.target.files || [])
+                setFiles((atuais) => [...atuais, ...novasFotos])
+                e.target.value = ''
+              }}
             />
           </label>
 
