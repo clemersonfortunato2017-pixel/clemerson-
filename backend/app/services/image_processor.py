@@ -78,7 +78,11 @@ def processar_fotos_peca(part_id: int, arquivos_originais: list[Path], uploads_d
     todas as fotos do lote — carregar o modelo de novo a cada foto (8x numa
     peça) multiplicava a memória usada à toa."""
     saida_dir = uploads_dir / str(part_id) / "otimizadas"
-    session = new_session("u2net") if REMBG_OK else None
+    # u2netp em vez de u2net: modelo ~40x menor (4.7MB vs 176MB) — o container
+    # do Railway está derrubando o processo por falta de memória mesmo com
+    # imagem reduzida e sessão reaproveitada (confirmado reproduzindo com
+    # fotos sintéticas de 12MP), então a saída é um modelo mais leve.
+    session = new_session("u2netp") if REMBG_OK else None
 
     resultados = []
     for origem in arquivos_originais:
