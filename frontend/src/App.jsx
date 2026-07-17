@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Routes, Route, Navigate, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { Package, LayoutDashboard, Download, DollarSign, Search, Car, ShoppingCart, BarChart2, Menu, X, Camera, Users, LogOut } from 'lucide-react'
+import { Package, LayoutDashboard, Download, DollarSign, Search, Car, ShoppingCart, BarChart2, Menu, X, Camera, Users, LogOut, PlusSquare } from 'lucide-react'
 import Dashboard from './pages/Dashboard'
 import Parts from './pages/Parts'
 import Import from './pages/Import'
@@ -15,6 +15,7 @@ import Login from './pages/Login'
 import PendingUsers from './pages/PendingUsers'
 import DailyReport from './pages/DailyReport'
 import AcceptInvite from './pages/AcceptInvite'
+import InstallApp from './pages/InstallApp'
 import { getPendingUsers } from './api'
 
 const PUBLIC_PATHS = ['/login', '/aceitar-convite']
@@ -62,6 +63,7 @@ export default function App() {
     { to: '/financial', icon: DollarSign, label: 'Financeiro' },
     { to: '/abc', icon: BarChart2, label: 'Curva ABC' },
     { to: '/import', icon: Download, label: 'Importar' },
+    { to: '/instalar', icon: PlusSquare, label: 'Instalar app' },
     ...(isAdmin ? [{ to: '/usuarios-pendentes', icon: Users, label: 'Usuários', badge: pending.length }] : []),
   ]
 
@@ -155,6 +157,7 @@ export default function App() {
             <Route path="/financial" element={<Financial />} />
             <Route path="/abc" element={<AbcCurve />} />
             <Route path="/import" element={<Import />} />
+            <Route path="/instalar" element={<InstallApp />} />
             <Route path="/relatorio-diario" element={<DailyReport />} />
             <Route path="/usuarios-pendentes" element={<PendingUsers />} />
           </Routes>
