@@ -50,7 +50,7 @@ export default function DailyReport() {
             <div className="bg-white border border-gray-100 rounded-xl p-4">
               <p className="text-xs text-gray-500">Valor total</p>
               <p className="text-2xl font-bold text-green-600">
-                {data.total_value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                {(data.total_value || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
               </p>
             </div>
             <div className="bg-white border border-gray-100 rounded-xl p-4">
@@ -61,7 +61,7 @@ export default function DailyReport() {
 
           <h2 className="text-sm font-semibold text-gray-700 mb-2">Publicados</h2>
           <div className="space-y-2 mb-6">
-            {data.published.map((p, i) => (
+            {(data.published || []).map((p, i) => (
               <a key={i} href={p.url} target="_blank" rel="noreferrer"
                 className="flex items-center justify-between bg-white border border-gray-100 rounded-lg px-4 py-2.5 hover:border-orange-300 transition-colors">
                 <div className="flex items-center gap-2">
@@ -73,12 +73,12 @@ export default function DailyReport() {
                 </span>
               </a>
             ))}
-            {data.published.length === 0 && <p className="text-gray-400 text-sm">Nenhum anúncio publicado neste dia.</p>}
+            {(data.published || []).length === 0 && <p className="text-gray-400 text-sm">Nenhum anúncio publicado neste dia.</p>}
           </div>
 
           <h2 className="text-sm font-semibold text-gray-700 mb-2">Erros — precisam de atenção</h2>
           <div className="space-y-2">
-            {data.errors.map((e, i) => (
+            {(data.errors || []).map((e, i) => (
               <div key={i} className="bg-red-50 border border-red-100 rounded-lg px-4 py-2.5">
                 <div className="flex items-center gap-2">
                   <XCircle size={16} className="text-red-500" />
@@ -87,7 +87,7 @@ export default function DailyReport() {
                 <pre className="text-xs text-red-700 mt-1 whitespace-pre-wrap">{JSON.stringify(e.log, null, 2)}</pre>
               </div>
             ))}
-            {data.errors.length === 0 && <p className="text-gray-400 text-sm">Nenhum erro neste dia.</p>}
+            {(data.errors || []).length === 0 && <p className="text-gray-400 text-sm">Nenhum erro neste dia.</p>}
           </div>
         </>
       )}
