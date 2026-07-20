@@ -1,14 +1,57 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.part import Part, MarketplaceListing, StockMovement
 from app.services.platform_registry import (
     close_on_all_accounts, publish_to_all_accounts, get_platforms_status,
+    _ml_legacy_account, _fetch_ml_item_detail, MercadoLivrePlatform,
 )
 from app.services.cross_platform_sync import retry_listing_sync
 from app.routes.auth import get_current_user
 
 router = APIRouter(prefix="/platforms", tags=["platforms"], dependencies=[Depends(get_current_user)])
+
+
+class PublishWithReference(BaseModel):
+    reference_listing_id: str
+
+
+@router.post("/parts/{part_id}/publish-with-reference")
+async def publish_with_reference(part_id: int, data: PublishWithReference, db: Session = Depends(get_db)):
+    """Publica uma peça NUNCA anunciada usando outro anúncio ML já ativo (de
+    peça parecida, não necessariamente a mesma) como referência de categoria/
+    atributos — pra quando a esteira automática identifica uma peça igual a
+    algo que já vendemos, mas essa unidade física em si nunca foi publicada
+    (então `publish_to_all_accounts` não tem nenhum listing próprio pra
+    montar `reference` sozinho). Usa sempre as FOTOS da peça nova (nunca as
+    da referência)."""
+    part = db.query(Part).filter(Part.id == part_id).first()
+    if not part:
+        raise HTTPException(404, "Peça não encontrada")
+
+    reference = await _fetch_ml_item_detail(data.reference_listing_id, db)
+    if not reference:
+        raise HTTPException(404, "Anúncio de referência não encontrado no ML")
+    reference["pictures"] = []  # força usar as fotos da própria peça nova
+
+    account = await _ml_legacy_account(db)
+    if not account:
+        raise HTTPException(400, "Conta ML principal não conectada")
+
+    result = await MercadoLivrePlatform().publish(part, account, reference=reference)
+    if "listing_id" not in result:
+        raise HTTPException(400, f"ML recusou: {result.get('error')}")
+
+    listing = MarketplaceListing(
+        part_id=part.id, marketplace="mercadolivre", listing_id=result["listing_id"],
+        url=result.get("url", ""), status="active", price=part.sale_price,
+    )
+    db.add(listing)
+    db.commit()
+
+    fanout = await publish_to_all_accounts(part_id, db)
+    return {"primary": result, "fanout": fanout}
 
 
 @router.get("/status")
