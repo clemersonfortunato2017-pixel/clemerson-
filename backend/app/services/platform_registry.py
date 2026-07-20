@@ -213,12 +213,19 @@ class MercadoLivrePlatform(PlatformBase):
             pictures = [{"id": p["id"]} for p in reference.get("pictures", []) if p.get("id")][:12]
             if not pictures:
                 pictures = [{"source": url} for url in (part.photos or [])[:12]]
+            NON_COPYABLE_ATTRS = {"ITEM_CONDITION", "CATALOG_TITLE", "HAS_COMPATIBILITIES"}
             attributes = [
                 {"id": a["id"], **({"value_id": a["value_id"]} if a.get("value_id") else {}),
                  **({"value_name": a["value_name"]} if a.get("value_name") else {})}
                 for a in reference.get("attributes", [])
-                if a.get("id") and (a.get("value_id") or a.get("value_name"))
+                if a.get("id") and a["id"] not in NON_COPYABLE_ATTRS
+                and (a.get("value_id") or a.get("value_name") or a.get("values"))
             ]
+            for a in reference.get("attributes", []):
+                if a.get("id") not in NON_COPYABLE_ATTRS and a.get("values") and not (a.get("value_id") or a.get("value_name")):
+                    for attr in attributes:
+                        if attr["id"] == a["id"]:
+                            attr["values"] = a["values"]
             payload = {
                 "title": part.title[:60],
                 "category_id": reference.get("category_id") or part.category or "MLB3937",
