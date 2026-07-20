@@ -29,8 +29,14 @@ class PlatformBase(ABC):
     display_name: str  # nome exibido (ex: "Mercado Livre")
 
     @abstractmethod
-    async def publish(self, part: Part, account: dict) -> dict:
-        """Publica peça na plataforma usando a conta informada. Retorna {listing_id, url} ou {error}."""
+    async def publish(self, part: Part, account: dict, reference: Optional[dict] = None) -> dict:
+        """Publica peça na plataforma usando a conta informada. `reference` é o
+        detalhe completo (GET /items) de um anúncio já existente da MESMA peça
+        na MESMA plataforma (ex: republicar na conta PF algo que já está na
+        conta principal) — quando presente, reaproveita category/attributes/
+        pictures de lá em vez de tentar reconstruir do zero (categorias do ML
+        exigem atributos específicos tipo BRAND/PART_NUMBER que não dá pra
+        adivinhar genericamente). Retorna {listing_id, url} ou {error}."""
         ...
 
     @abstractmethod
@@ -155,6 +161,22 @@ async def get_accounts_for_platform(platform_name: str, db: Session) -> list[dic
     return accounts
 
 
+async def _fetch_ml_item_detail(listing_id: str, db: Session) -> Optional[dict]:
+    """Busca o detalhe completo (category/attributes/pictures/condition) de um
+    anúncio ML já ativo, pra servir de referência ao publicar a mesma peça
+    numa conta nova. Sempre usa a conta legada pra ler (leitura de item
+    público não depende de qual conta é dona do anúncio)."""
+    account = await _ml_legacy_account(db)
+    if not account:
+        return None
+    headers = {"Authorization": f"Bearer {account['access_token']}"}
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.get(f"https://api.mercadolibre.com/items/{listing_id}", headers=headers)
+        if r.status_code == 200:
+            return r.json()
+    return None
+
+
 async def resolve_account_for_listing(listing: MarketplaceListing, db: Session) -> Optional[dict]:
     """Reconstrói o dict de conta a partir de uma listagem existente — usado
     quando preciso fechar/atualizar UM anúncio específico e já sei (pelo
@@ -178,24 +200,54 @@ class MercadoLivrePlatform(PlatformBase):
     name = "mercadolivre"
     display_name = "Mercado Livre"
 
-    async def publish(self, part: Part, account: dict) -> dict:
+    async def publish(self, part: Part, account: dict, reference: Optional[dict] = None) -> dict:
         token = account.get("access_token")
         if not token:
             return {"error": "ML não conectado"}
 
-        # Payload conforme regras fixas da skill anuncio-ml-autopecas (Passo 7)
-        payload = {
-            "title": part.title[:60],
-            "category_id": part.category or "MLB3937",  # categoria genérica autopeças
-            "price": part.sale_price or 1.0,
-            "currency_id": "BRL",
-            "available_quantity": max(part.quantity, 1),
-            "buying_mode": "buy_it_now",
-            "listing_type_id": "gold_pro",
-            "condition": "new" if part.condition == "new" else "used",
-            "shipping": {"free_shipping": True},
-            "pictures": [{"source": url} for url in (part.photos or [])[:12]],
-        }
+        if reference:
+            # Reaproveita category/attributes/pictures de um anúncio já ativo
+            # da mesma peça — sem isso o ML recusa por faltar atributo
+            # obrigatório da categoria (ex: BRAND, PART_NUMBER), que não dá
+            # pra reconstruir genericamente sem saber a categoria de antemão.
+            pictures = [{"id": p["id"]} for p in reference.get("pictures", []) if p.get("id")][:12]
+            if not pictures:
+                pictures = [{"source": url} for url in (part.photos or [])[:12]]
+            attributes = [
+                {"id": a["id"], **({"value_id": a["value_id"]} if a.get("value_id") else {}),
+                 **({"value_name": a["value_name"]} if a.get("value_name") else {})}
+                for a in reference.get("attributes", [])
+                if a.get("id") and (a.get("value_id") or a.get("value_name"))
+            ]
+            payload = {
+                "title": part.title[:60],
+                "category_id": reference.get("category_id") or part.category or "MLB3937",
+                "price": part.sale_price or 1.0,
+                "currency_id": "BRL",
+                "available_quantity": max(part.quantity, 1),
+                "buying_mode": "buy_it_now",
+                "listing_type_id": reference.get("listing_type_id") or "gold_pro",
+                "condition": reference.get("condition") or ("new" if part.condition == "new" else "used"),
+                "shipping": {"free_shipping": bool((reference.get("shipping") or {}).get("free_shipping"))},
+                "pictures": pictures,
+                "attributes": attributes,
+            }
+        else:
+            # Fallback genérico — só serve pra categoria sem atributo
+            # obrigatório algum (raro). Sem reference, categorias normais de
+            # autopeças vão recusar por faltar BRAND/PART_NUMBER/etc.
+            payload = {
+                "title": part.title[:60],
+                "category_id": part.category or "MLB3937",
+                "price": part.sale_price or 1.0,
+                "currency_id": "BRL",
+                "available_quantity": max(part.quantity, 1),
+                "buying_mode": "buy_it_now",
+                "listing_type_id": "gold_pro",
+                "condition": "new" if part.condition == "new" else "used",
+                "shipping": {"free_shipping": True},
+                "pictures": [{"source": url} for url in (part.photos or [])[:12]],
+            }
 
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         async with httpx.AsyncClient(timeout=30) as client:
@@ -203,7 +255,7 @@ class MercadoLivrePlatform(PlatformBase):
             if r.status_code in (200, 201):
                 data = r.json()
                 return {"listing_id": data["id"], "url": data.get("permalink", "")}
-            return {"error": f"ML {r.status_code}: {r.text[:200]}"}
+            return {"error": f"ML {r.status_code}: {r.text[:400]}"}
 
     async def close(self, listing_id: str, account: dict) -> dict:
         token = account.get("access_token")
@@ -236,7 +288,7 @@ class ShopeePlatform(PlatformBase):
     name = "shopee"
     display_name = "Shopee"
 
-    async def publish(self, part: Part, account: dict) -> dict:
+    async def publish(self, part: Part, account: dict, reference: Optional[dict] = None) -> dict:
         if not account.get("access_token"):
             return {"error": "Shopee: conta não conectada (rode o fluxo OAuth em /platform-accounts/shopee/connect)"}
         from app.services.shopee_client import publish_item
@@ -259,7 +311,7 @@ class AmazonPlatform(PlatformBase):
     name = "amazon"
     display_name = "Amazon"
 
-    async def publish(self, part: Part, account: dict) -> dict:
+    async def publish(self, part: Part, account: dict, reference: Optional[dict] = None) -> dict:
         return {"error": "Amazon: configure AMAZON_SELLER_ID e AMAZON_MWS_TOKEN no .env"}
 
     async def close(self, listing_id: str, account: dict) -> dict:
@@ -273,7 +325,7 @@ class MagaluPlatform(PlatformBase):
     name = "magalu"
     display_name = "Magazine Luiza"
 
-    async def publish(self, part: Part, account: dict) -> dict:
+    async def publish(self, part: Part, account: dict, reference: Optional[dict] = None) -> dict:
         return {"error": "Magalu: parceria formal necessária — contact@magazineluiza.com.br"}
 
     async def close(self, listing_id: str, account: dict) -> dict:
@@ -287,7 +339,7 @@ class FacebookMarketplacePlatform(PlatformBase):
     name = "facebook"
     display_name = "Facebook Marketplace"
 
-    async def publish(self, part: Part, account: dict) -> dict:
+    async def publish(self, part: Part, account: dict, reference: Optional[dict] = None) -> dict:
         from app.config import settings
         catalog_id = getattr(settings, "facebook_catalog_id", None)
         token = account.get("access_token")
@@ -370,10 +422,25 @@ async def publish_to_all_accounts(part_id: int, db: Session) -> dict:
     if not part:
         return {"error": "Peça não encontrada"}
 
-    existing = {
-        (l.marketplace, l.platform_account_id)
-        for l in db.query(MarketplaceListing).filter(MarketplaceListing.part_id == part_id).all()
-    }
+    all_listings = db.query(MarketplaceListing).filter(MarketplaceListing.part_id == part_id).all()
+    existing = {(l.marketplace, l.platform_account_id) for l in all_listings}
+
+    # Referência por plataforma: um anúncio já ativo da MESMA peça na MESMA
+    # plataforma, buscado uma vez só, pra reaproveitar category/attributes/
+    # pictures ao publicar em conta nova (evita erro de atributo obrigatório
+    # da categoria que não dá pra adivinhar do zero).
+    reference_cache: dict[str, Optional[dict]] = {}
+
+    async def get_reference(platform_name: str) -> Optional[dict]:
+        if platform_name in reference_cache:
+            return reference_cache[platform_name]
+        ref = None
+        if platform_name == "mercadolivre":
+            existing_ml = next((l for l in all_listings if l.marketplace == "mercadolivre" and l.status == "active"), None)
+            if existing_ml:
+                ref = await _fetch_ml_item_detail(existing_ml.listing_id, db)
+        reference_cache[platform_name] = ref
+        return ref
 
     results = {}
     for platform_name, platform_impl in PLATFORMS.items():
@@ -383,7 +450,8 @@ async def publish_to_all_accounts(part_id: int, db: Session) -> dict:
             if key in existing:
                 results[account["label"]] = {"status": "already_listed"}
                 continue
-            r = await platform_impl.publish(part, account)
+            reference = await get_reference(platform_name)
+            r = await platform_impl.publish(part, account, reference=reference)
             if "listing_id" in r:
                 listing = MarketplaceListing(
                     part_id=part.id,
