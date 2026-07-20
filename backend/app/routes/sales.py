@@ -1,3 +1,4 @@
+import calendar
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func, extract
@@ -183,3 +184,42 @@ def monthly_financial(
     result["month"] = m
     result["year"] = y
     return result
+
+
+@router.get("/financial/daily")
+def daily_financial(
+    month: Optional[int] = None,
+    year: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    now = datetime.now()
+    m = month or now.month
+    y = year or now.year
+
+    rows = db.query(
+        extract("day", Sale.sold_at),
+        func.sum(Sale.total),
+        func.count(Sale.id),
+        func.sum(Sale.net_total),
+        func.sum(Sale.profit),
+    ).filter(
+        Sale.status == "completed",
+        extract("month", Sale.sold_at) == m,
+        extract("year", Sale.sold_at) == y,
+    ).group_by(extract("day", Sale.sold_at)).all()
+
+    by_day = {int(r[0]): r for r in rows}
+    days_in_month = calendar.monthrange(y, m)[1]
+
+    days = []
+    for d in range(1, days_in_month + 1):
+        r = by_day.get(d)
+        days.append({
+            "day": d,
+            "total": float(r[1] or 0) if r else 0.0,
+            "count": int(r[2] or 0) if r else 0,
+            "net": float(r[3] or 0) if r else 0.0,
+            "profit": float(r[4] or 0) if r else 0.0,
+        })
+
+    return {"days": days, "month": m, "year": y}

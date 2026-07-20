@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { DollarSign, ShoppingBag, TrendingUp, Plus, X, TrendingDown } from 'lucide-react'
-import { getMonthlyFinancial, createSale, getParts } from '../api'
+import { DollarSign, ShoppingBag, TrendingUp, Plus, X, TrendingDown, Calendar } from 'lucide-react'
+import { getMonthlyFinancial, getDailyFinancial, createSale, getParts } from '../api'
 
 const PLATFORM_LABELS = { mercadolivre: 'Mercado Livre', shopee: 'Shopee', amazon: 'Amazon', balcao: 'Balcão' }
 const PLATFORM_COLORS = {
@@ -25,6 +25,11 @@ export default function Financial() {
   const { data: fin } = useQuery({
     queryKey: ['financial', month, year],
     queryFn: () => getMonthlyFinancial({ month, year }),
+  })
+
+  const { data: daily } = useQuery({
+    queryKey: ['financial-daily', month, year],
+    queryFn: () => getDailyFinancial({ month, year }),
   })
 
   const { data: partsData } = useQuery({
@@ -115,6 +120,44 @@ export default function Financial() {
             )}
           </div>
         ))}
+      </div>
+
+      {/* Vendas por dia */}
+      <div className="bg-white border border-gray-200 rounded-xl p-5 mb-8">
+        <div className="flex items-center gap-2 mb-4">
+          <Calendar size={16} className="text-gray-400" />
+          <h3 className="text-sm font-semibold text-gray-900">Vendas por dia — {months[month - 1]}/{year}</h3>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-gray-400 text-xs border-b border-gray-100">
+                <th className="py-2 font-medium">Dia</th>
+                <th className="py-2 font-medium">Faturamento</th>
+                <th className="py-2 font-medium">Líquido</th>
+                <th className="py-2 font-medium">Lucro</th>
+                <th className="py-2 font-medium">Vendas</th>
+              </tr>
+            </thead>
+            <tbody>
+              {daily?.days?.map(d => {
+                const isToday = d.day === now.getDate() && month === now.getMonth() + 1 && year === now.getFullYear()
+                return (
+                  <tr key={d.day} className={`border-b border-gray-50 ${isToday ? 'bg-orange-50' : d.total > 0 ? '' : 'text-gray-300'}`}>
+                    <td className="py-2 font-medium text-gray-700">
+                      {String(d.day).padStart(2, '0')}
+                      {isToday && <span className="ml-2 text-[10px] text-orange-500 font-semibold">HOJE</span>}
+                    </td>
+                    <td className="py-2">{fmt(d.total)}</td>
+                    <td className="py-2 text-gray-500">{fmt(d.net)}</td>
+                    <td className={`py-2 ${d.profit >= 0 ? 'text-green-600' : 'text-red-500'}`}>{fmt(d.profit)}</td>
+                    <td className="py-2 text-gray-500">{d.count}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {/* Modal venda balcão */}

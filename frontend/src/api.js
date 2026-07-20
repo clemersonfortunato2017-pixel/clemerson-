@@ -53,6 +53,7 @@ export const syncCompatFromTitles = () => api.post('/import/sync-compatibility-t
 export const getSales = (params) => api.get('/sales/', { params }).then(r => r.data)
 export const createSale = (data) => api.post('/sales/', data).then(r => r.data)
 export const getMonthlyFinancial = (params) => api.get('/sales/financial/monthly', { params }).then(r => r.data)
+export const getDailyFinancial = (params) => api.get('/sales/financial/daily', { params }).then(r => r.data)
 
 export const getPartCompatibility = (partId) => api.get(`/compatibility/parts/${partId}`).then(r => r.data)
 export const addCompatibility = (data) => api.post('/compatibility/', data).then(r => r.data)
