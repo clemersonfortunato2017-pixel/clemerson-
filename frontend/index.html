@@ -15,8 +15,14 @@
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
     <script>
+      // Não registra mais nenhum service worker novo — o antigo (se existir
+      // no navegador de alguém) se autodestrói sozinho via sw.js. Registrar
+      // de novo aqui a cada carregamento criava um loop: SW se autodestrói,
+      // recarrega a página, a página registra o SW de novo, repete.
       if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('/sw.js');
+        navigator.serviceWorker.getRegistrations().then((regs) => {
+          regs.forEach((reg) => reg.unregister());
+        });
       }
     </script>
   </body>
