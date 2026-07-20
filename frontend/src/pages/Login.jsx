@@ -72,7 +72,7 @@ export default function Login() {
       if (mode === 'login') {
         const data = await login({ email, password })
         localStorage.setItem('pitbox_token', data.access_token)
-        localStorage.setItem('pitbox_user', JSON.stringify(data.user))
+        if (data.user) localStorage.setItem('pitbox_user', JSON.stringify(data.user))
         navigate('/')
       } else {
         await register({ name, email, password })
@@ -88,7 +88,7 @@ export default function Login() {
 
   const handleGoogleSuccess = (data) => {
     localStorage.setItem('pitbox_token', data.access_token)
-    localStorage.setItem('pitbox_user', JSON.stringify(data.user))
+    if (data.user) localStorage.setItem('pitbox_user', JSON.stringify(data.user))
     navigate('/')
   }
 

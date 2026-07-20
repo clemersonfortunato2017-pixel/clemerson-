@@ -27,7 +27,16 @@ export default function App() {
   const navigate = useNavigate()
   const isPublicPage = PUBLIC_PATHS.includes(location.pathname)
   const token = localStorage.getItem('pitbox_token')
-  const user = JSON.parse(localStorage.getItem('pitbox_user') || 'null')
+  let user = null
+  try {
+    // Um valor salvo corrompido (ex: a string literal "undefined", que
+    // localStorage.setItem grava se alguém passar undefined sem querer)
+    // não pode derrubar o app inteiro — trata como deslogado e segue.
+    user = JSON.parse(localStorage.getItem('pitbox_user') || 'null')
+  } catch {
+    localStorage.removeItem('pitbox_token')
+    localStorage.removeItem('pitbox_user')
+  }
   const isAdmin = user?.role === 'admin'
 
   const { data: pending = [] } = useQuery({

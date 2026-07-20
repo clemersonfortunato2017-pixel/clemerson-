@@ -20,7 +20,7 @@ export default function AcceptInvite() {
     try {
       const data = await acceptInvite({ token, password })
       localStorage.setItem('pitbox_token', data.access_token)
-      localStorage.setItem('pitbox_user', JSON.stringify(data.user))
+      if (data.user) localStorage.setItem('pitbox_user', JSON.stringify(data.user))
       navigate('/')
     } catch (err) {
       setError(err.response?.data?.detail || 'Convite inválido ou já utilizado')
