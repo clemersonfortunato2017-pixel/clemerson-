@@ -70,5 +70,13 @@ export const getPlatformsStatus = () => api.get('/platforms/status').then(r => r
 export const soldAtCounter = (id) => api.post(`/platforms/parts/${id}/sold-balcao`).then(r => r.data)
 export const publishToAll = (id) => api.post(`/platforms/parts/${id}/publish-all`).then(r => r.data)
 export const reactivatePart = (id) => api.post(`/platforms/parts/${id}/reactivate`).then(r => r.data)
+export const getSyncFailures = () => api.get('/platforms/sync-failures').then(r => r.data)
+export const retrySyncFailure = (listingId) => api.post(`/platforms/sync-failures/${listingId}/retry`).then(r => r.data)
+
+// Multi-conta (contas extras por plataforma: ML pessoa física, Shopee PJ, etc)
+export const getPlatformAccounts = () => api.get('/platform-accounts/').then(r => r.data)
+export const connectPlatformAccount = (platform, label) => api.get(`/platform-accounts/${platform}/connect`, { params: { label } }).then(r => r.data)
+export const togglePlatformAccount = (id) => api.post(`/platform-accounts/${id}/toggle`).then(r => r.data)
+export const deletePlatformAccount = (id) => api.delete(`/platform-accounts/${id}`).then(r => r.data)
 
 export default api

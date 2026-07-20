@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Routes, Route, Navigate, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { Package, LayoutDashboard, Download, DollarSign, Search, Car, ShoppingCart, BarChart2, Menu, X, Camera, Users, LogOut, PlusSquare } from 'lucide-react'
+import { Package, LayoutDashboard, Download, DollarSign, Search, Car, ShoppingCart, BarChart2, Menu, X, Camera, Users, LogOut, PlusSquare, Link2 } from 'lucide-react'
 import Dashboard from './pages/Dashboard'
 import Parts from './pages/Parts'
 import Import from './pages/Import'
@@ -16,6 +16,7 @@ import PendingUsers from './pages/PendingUsers'
 import DailyReport from './pages/DailyReport'
 import AcceptInvite from './pages/AcceptInvite'
 import InstallApp from './pages/InstallApp'
+import PlatformAccounts from './pages/PlatformAccounts'
 import { getPendingUsers } from './api'
 
 const PUBLIC_PATHS = ['/login', '/aceitar-convite']
@@ -61,6 +62,7 @@ export default function App() {
     { to: '/search', icon: Search, label: 'Busca Rápida' },
     { to: '/vehicle', icon: Car, label: 'Por Veículo' },
     { to: '/financial', icon: DollarSign, label: 'Financeiro' },
+    { to: '/contas', icon: Link2, label: 'Contas conectadas' },
     { to: '/abc', icon: BarChart2, label: 'Curva ABC' },
     { to: '/import', icon: Download, label: 'Importar' },
     { to: '/instalar', icon: PlusSquare, label: 'Instalar app' },
@@ -155,6 +157,7 @@ export default function App() {
             <Route path="/search" element={<QuickSearch />} />
             <Route path="/vehicle" element={<VehicleSearch />} />
             <Route path="/financial" element={<Financial />} />
+            <Route path="/contas" element={<PlatformAccounts />} />
             <Route path="/abc" element={<AbcCurve />} />
             <Route path="/import" element={<Import />} />
             <Route path="/instalar" element={<InstallApp />} />

@@ -96,6 +96,12 @@ class MarketplaceListing(Base):
     url = Column(String(500))
     status = Column(String(50))
     price = Column(Float)
+    # Multi-conta: qual PlatformAccount publicou este anúncio. NULL = conta
+    # legada/principal do Mercado Livre (MLCredential), não uma linha extra.
+    platform_account_id = Column(Integer, ForeignKey("platform_accounts.id"), nullable=True)
+    # True quando a sincronização de estoque pra este anúncio esgotou as
+    # tentativas depois de uma venda em outra plataforma — precisa de retry manual.
+    sync_failed = Column(Boolean, default=False)
     synced_at = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

@@ -200,7 +200,13 @@ def validate_before_publish(part_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/parts/{part_id}/mark-published", dependencies=[Depends(require_service_key)])
-def mark_published(part_id: int, data: PublishResult, db: Session = Depends(get_db)):
+async def mark_published(part_id: int, data: PublishResult, db: Session = Depends(get_db)):
+    """A rotina agendada chama isso depois de publicar a peça na conta ML
+    principal (única publicação que exige raciocínio: título, categoria,
+    preço pesquisado). A partir daqui é mecânico — o Pitbox assume e
+    republica automaticamente em TODAS as outras contas/plataformas
+    conectadas (ML pessoa física, Shopee PJ, etc), sem precisar a rotina
+    saber nada de cada plataforma."""
     part = _get_part_or_404(part_id, db)
     listing = MarketplaceListing(
         part_id=part.id,
@@ -209,13 +215,20 @@ def mark_published(part_id: int, data: PublishResult, db: Session = Depends(get_
         url=data.url,
         status="active",
         price=data.price,
+        platform_account_id=None,  # conta ML principal/legada
     )
     db.add(listing)
     part.status = "published"
     part.sale_price = data.price
     _log(part, "publicado", {"listing_id": data.listing_id, "url": data.url, "price": data.price})
     db.commit()
-    return {"ok": True}
+
+    from app.services.platform_registry import publish_to_all_accounts
+    fanout = await publish_to_all_accounts(part.id, db)
+    _log(part, "fanout_multiconta", fanout)
+    db.commit()
+
+    return {"ok": True, "fanout": fanout}
 
 
 @router.post("/parts/{part_id}/mark-error", dependencies=[Depends(require_service_key)])
