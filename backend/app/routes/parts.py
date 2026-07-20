@@ -1,10 +1,10 @@
 from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, BackgroundTasks
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
 from typing import Optional
 from pydantic import BaseModel
-from app.database import get_db
+from app.database import get_db, SessionLocal
 from app.models.part import Part, StockMovement, Compatibility
 from app.config import settings
 from app.routes.auth import get_current_user
@@ -75,10 +75,16 @@ def _log_step(part: Part, step: str, detail: str = ""):
 
 def _process_photos(part: Part, originais_paths: list[str], db: Session):
     """Otimiza as fotos e marca a peça como pronta pra esteira automática
-    (Passo A3) pegar e publicar. Roda SÍNCRONO dentro do próprio request de
-    upload — rodar em BackgroundTasks deixava a peça travada em 'processing'
-    pra sempre se um deploy reiniciasse o servidor no meio do processamento
-    (aconteceu na prática em 2026-07-16, peça #446)."""
+    (Passo A3) pegar e publicar.
+
+    Roda em BackgroundTasks (chamado depois da resposta do upload já ter
+    voltado) — processar 6-8 fotos com o rembg (u2net) dentro do próprio
+    request estourava o timeout de proxy do Railway pro cliente (visto na
+    prática: "Erro ao enviar fotos" sem detalhe, é timeout de rede, não
+    erro real). Antes rodava síncrono de propósito, pra evitar peça travada
+    em 'processing' se o deploy reiniciasse o servidor no meio — esse caso
+    agora tem recuperação manual via POST /internal/parts/{id}/reprocess,
+    então não precisa mais travar a resposta do upload por causa disso."""
     from app.services.image_processor import processar_fotos_peca
 
     try:
@@ -94,16 +100,31 @@ def _process_photos(part: Part, originais_paths: list[str], db: Session):
     db.commit()
 
 
+def _process_photos_background(part_id: int, originais_paths: list[str]):
+    """Wrapper pra rodar _process_photos com sua própria sessão de banco —
+    chamado via BackgroundTasks, não pode reaproveitar a sessão do request
+    (já fechou quando isto roda)."""
+    db = SessionLocal()
+    try:
+        part = db.query(Part).filter(Part.id == part_id).first()
+        if part:
+            _process_photos(part, originais_paths, db)
+    finally:
+        db.close()
+
+
 @router.post("/upload-photos")
 async def upload_photos(
+    background_tasks: BackgroundTasks,
     files: list[UploadFile] = File(...),
     db: Session = Depends(get_db),
 ):
-    """Recebe fotos tiradas/enviadas no Pitbox, cria a peça e otimiza as fotos
-    (remove fundo, 1000x1000) antes de responder — processamento síncrono de
-    propósito, ver _process_photos. A identificação da peça, pesquisa de
-    compatibilidade/concorrentes e publicação no Mercado Livre ficam por
-    conta da rotina agendada (esteira automática), não deste endpoint."""
+    """Recebe fotos tiradas/enviadas no Pitbox, cria a peça e devolve resposta
+    na hora — a otimização de foto (remove fundo, 1000x1000) roda em
+    background depois, ver _process_photos_background. A identificação da
+    peça, pesquisa de compatibilidade/concorrentes e publicação no Mercado
+    Livre ficam por conta da rotina agendada (esteira automática), não
+    deste endpoint."""
     MIN_PHOTOS = 6  # mais que 5, por pedido do Clemerson — não confiar só na trava do frontend
     if len(files) < MIN_PHOTOS:
         raise HTTPException(status_code=400, detail=f"Envie no mínimo {MIN_PHOTOS} fotos da peça (recebi {len(files)}).")
@@ -134,7 +155,7 @@ async def upload_photos(
     db.commit()
     db.refresh(part)
 
-    _process_photos(part, saved_paths, db)
+    background_tasks.add_task(_process_photos_background, part.id, saved_paths)
 
     return {"id": part.id, "status": part.status, "photos_received": len(files)}
 
