@@ -183,6 +183,50 @@ async def sync_part_compatibility(part_id: int, listing_id: str, db: Session, he
     return added
 
 
+async def push_part_compatibility_to_ml(part_id: int, listing_id: str, db: Session, headers: dict, client: httpx.AsyncClient) -> dict:
+    """Envia pro ML a compatibilidade de veículos que o Pitbox já tem no banco
+    pra essa peça — sem isso o anúncio fica sem 'ficha técnica' e o ML marca
+    'Inativo para revisar / Não indica os veículos compatíveis' depois de uns
+    dias (visto em anúncios reais em 2026-07-20). Espelha o mesmo shape que
+    sync_part_compatibility já lê de volta (attributes com id/value_name),
+    então fica simétrico com o import."""
+    compats = db.query(Compatibility).filter(Compatibility.part_id == part_id).all()
+    if not compats:
+        return {"skipped": "peça sem compatibilidade cadastrada no Pitbox"}
+
+    entries = []
+    for c in compats:
+        v = db.query(Vehicle).filter(Vehicle.id == c.vehicle_id).first()
+        if not v:
+            continue
+        attrs = [
+            {"id": "BRAND", "value_name": v.brand},
+            {"id": "MODEL", "value_name": v.model},
+        ]
+        if v.year_start:
+            years = str(v.year_start) if v.year_start == v.year_end or not v.year_end else f"{v.year_start}-{v.year_end}"
+            attrs.append({"id": "YEARS", "value_name": years})
+        if v.engine:
+            attrs.append({"id": "ENGINE_VERSION", "value_name": v.engine})
+        entries.append({"attributes": attrs})
+
+    if not entries:
+        return {"skipped": "nenhum veículo válido pra enviar"}
+
+    r = await client.post(
+        f"{ML_API}/items/{listing_id}/compatibilities",
+        headers=headers,
+        json={"compatibilities": entries},
+        timeout=20,
+    )
+    return {
+        "status_code": r.status_code,
+        "ok": r.status_code in (200, 201),
+        "sent": entries,
+        "response": r.json() if r.headers.get("content-type", "").startswith("application/json") else r.text[:500],
+    }
+
+
 async def import_from_ml(db: Session) -> dict:
     debug_error = None
     try:
