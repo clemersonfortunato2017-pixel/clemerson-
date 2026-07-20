@@ -1,10 +1,13 @@
 import calendar
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import func, extract
+from sqlalchemy import extract
 from typing import Optional
 from pydantic import BaseModel
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+BRT = ZoneInfo("America/Sao_Paulo")
 from app.database import get_db
 from app.models.sale import Sale, SaleItem
 from app.models.part import Part, StockMovement
@@ -139,44 +142,52 @@ def list_sales(
     return {"total": total, "items": items}
 
 
+def _month_range_brt(m: int, y: int) -> tuple[datetime, datetime]:
+    """Início/fim do mês em horário de Brasília (não UTC) — sold_at é salvo
+    em UTC, e agrupar direto pelo dia/mês em UTC empurra qualquer venda
+    depois das 21h (horário de Brasília) pro dia seguinte errado. Comparação
+    contra DateTime(timezone=True) do Postgres funciona certo com datetime
+    timezone-aware independente do timezone da sessão do banco."""
+    start = datetime(y, m, 1, tzinfo=BRT)
+    end = datetime(y + 1, 1, 1, tzinfo=BRT) if m == 12 else datetime(y, m + 1, 1, tzinfo=BRT)
+    return start, end
+
+
+def _completed_sales_in_month(db: Session, m: int, y: int) -> list[Sale]:
+    start, end = _month_range_brt(m, y)
+    return db.query(Sale).filter(
+        Sale.status == "completed",
+        Sale.sold_at >= start,
+        Sale.sold_at < end,
+    ).all()
+
+
 @router.get("/financial/monthly")
 def monthly_financial(
     month: Optional[int] = None,
     year: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
-    now = datetime.now()
-    m = month or now.month
-    y = year or now.year
+    now_brt = datetime.now(BRT)
+    m = month or now_brt.month
+    y = year or now_brt.year
 
     platforms = ["mercadolivre", "shopee", "amazon", "balcao"]
-    result = {}
-    grand_total = 0
-    grand_net = 0
-    grand_profit = 0
+    result = {p: {"total": 0.0, "count": 0, "net": 0.0, "profit": 0.0, "fees": 0.0} for p in platforms}
+    grand_total = grand_net = grand_profit = 0.0
 
-    for platform in platforms:
-        row = db.query(
-            func.sum(Sale.total),
-            func.count(Sale.id),
-            func.sum(Sale.net_total),
-            func.sum(Sale.profit),
-            func.sum(Sale.payment_fee_value),
-        ).filter(
-            Sale.platform == platform,
-            Sale.status == "completed",
-            extract("month", Sale.sold_at) == m,
-            extract("year", Sale.sold_at) == y,
-        ).first()
-        total = float(row[0] or 0)
-        count = int(row[1] or 0)
-        net = float(row[2] or 0)
-        profit = float(row[3] or 0)
-        fees = float(row[4] or 0)
-        result[platform] = {"total": total, "count": count, "net": net, "profit": profit, "fees": fees}
-        grand_total += total
-        grand_net += net
-        grand_profit += profit
+    for sale in _completed_sales_in_month(db, m, y):
+        p = result.get(sale.platform)
+        if p is None:
+            continue
+        p["total"] += sale.total or 0
+        p["count"] += 1
+        p["net"] += sale.net_total or 0
+        p["profit"] += sale.profit or 0
+        p["fees"] += sale.payment_fee_value or 0
+        grand_total += sale.total or 0
+        grand_net += sale.net_total or 0
+        grand_profit += sale.profit or 0
 
     result["total"] = grand_total
     result["net_total"] = grand_net
@@ -192,34 +203,23 @@ def daily_financial(
     year: Optional[int] = None,
     db: Session = Depends(get_db),
 ):
-    now = datetime.now()
-    m = month or now.month
-    y = year or now.year
+    now_brt = datetime.now(BRT)
+    m = month or now_brt.month
+    y = year or now_brt.year
 
-    rows = db.query(
-        extract("day", Sale.sold_at),
-        func.sum(Sale.total),
-        func.count(Sale.id),
-        func.sum(Sale.net_total),
-        func.sum(Sale.profit),
-    ).filter(
-        Sale.status == "completed",
-        extract("month", Sale.sold_at) == m,
-        extract("year", Sale.sold_at) == y,
-    ).group_by(extract("day", Sale.sold_at)).all()
+    by_day: dict[int, dict] = {}
+    for sale in _completed_sales_in_month(db, m, y):
+        local_day = sale.sold_at.astimezone(BRT).day
+        agg = by_day.setdefault(local_day, {"total": 0.0, "count": 0, "net": 0.0, "profit": 0.0})
+        agg["total"] += sale.total or 0
+        agg["count"] += 1
+        agg["net"] += sale.net_total or 0
+        agg["profit"] += sale.profit or 0
 
-    by_day = {int(r[0]): r for r in rows}
     days_in_month = calendar.monthrange(y, m)[1]
-
-    days = []
-    for d in range(1, days_in_month + 1):
-        r = by_day.get(d)
-        days.append({
-            "day": d,
-            "total": float(r[1] or 0) if r else 0.0,
-            "count": int(r[2] or 0) if r else 0,
-            "net": float(r[3] or 0) if r else 0.0,
-            "profit": float(r[4] or 0) if r else 0.0,
-        })
+    days = [
+        {"day": d, **by_day.get(d, {"total": 0.0, "count": 0, "net": 0.0, "profit": 0.0})}
+        for d in range(1, days_in_month + 1)
+    ]
 
     return {"days": days, "month": m, "year": y}
