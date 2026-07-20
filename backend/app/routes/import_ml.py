@@ -114,3 +114,16 @@ def push_compatibility_all(background_tasks: BackgroundTasks):
 @router.get("/push-compatibility/status")
 def push_compatibility_status():
     return push_compat_state
+
+
+@router.get("/ml-proxy")
+async def ml_get_proxy(path: str, db: Session = Depends(get_db)):
+    """Proxy só-leitura pra explorar endpoints GET da API do ML usando o token
+    que o backend já gerencia — usado só durante o desenvolvimento da feature
+    de compatibilidade (descobrir domain_id/attribute value_id), nunca expõe
+    o token em si pro chamador."""
+    user_id, token = await get_valid_access_token(db)
+    headers = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.get(f"https://api.mercadolibre.com/{path.lstrip('/')}", headers=headers)
+    return {"status_code": r.status_code, "body": r.json() if r.headers.get("content-type", "").startswith("application/json") else r.text[:2000]}
