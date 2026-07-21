@@ -239,6 +239,11 @@ class MercadoLivrePlatform(PlatformBase):
                 "pictures": pictures,
                 "attributes": attributes,
             }
+            # family_name virou obrigatório pra algumas categorias (ex: MLB63464,
+            # comando de seta/limpador) — sem isso ML recusa com
+            # "body.required_fields ... family_name" mesmo com category/attrs ok.
+            if reference.get("family_name"):
+                payload["family_name"] = reference["family_name"]
         else:
             # Fallback genérico — só serve pra categoria sem atributo
             # obrigatório algum (raro). Sem reference, categorias normais de
