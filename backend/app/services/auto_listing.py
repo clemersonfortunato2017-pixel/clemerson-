@@ -26,8 +26,12 @@ def _log_step(part: Part, step: str, detail) -> None:
 
 
 async def _claude_call(client: httpx.AsyncClient, messages: list, tools: list | None = None, max_tokens: int = 1024) -> dict:
+    key = settings.anthropic_api_key
+    non_ascii = [(i, c, ord(c)) for i, c in enumerate(key) if ord(c) > 127]
+    if non_ascii:
+        raise ValueError(f"ANTHROPIC_API_KEY tem {len(key)} chars, {len(non_ascii)} não-ASCII: {non_ascii[:5]}")
     headers = {
-        "x-api-key": settings.anthropic_api_key,
+        "x-api-key": key,
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
     }
