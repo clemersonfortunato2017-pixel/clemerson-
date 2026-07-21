@@ -5,6 +5,7 @@ from app.database import get_db, SessionLocal
 from app.models.part import Part, MarketplaceListing
 from app.services.ml_importer import import_from_ml, sync_all_compatibility, get_valid_access_token, push_part_compatibility_to_ml
 from app.services.title_compat_parser import sync_compat_from_titles
+from app.services.auto_listing import prepare_part
 from app.routes.auth import get_current_user
 
 router = APIRouter(prefix="/import", tags=["import"], dependencies=[Depends(get_current_user)])
@@ -12,6 +13,7 @@ router = APIRouter(prefix="/import", tags=["import"], dependencies=[Depends(get_
 # Estado simples do job de sync em memória
 sync_state = {"running": False, "processed": 0, "added": 0, "done": False, "error": None}
 push_compat_state = {"running": False, "processed": 0, "pushed": 0, "skipped": 0, "errors": [], "done": False}
+prepare_state = {"running": False, "processed": 0, "ready": 0, "needs_review": 0, "done": True}
 
 
 async def _run_sync():
@@ -114,6 +116,46 @@ def push_compatibility_all(background_tasks: BackgroundTasks):
 @router.get("/push-compatibility/status")
 def push_compatibility_status():
     return push_compat_state
+
+
+def _has_step(part: Part, step: str) -> bool:
+    return any(s.get("step") == step for s in (part.pipeline_log or []))
+
+
+async def _run_prepare_pending():
+    prepare_state.update({"running": True, "processed": 0, "ready": 0, "needs_review": 0, "done": False})
+    db = SessionLocal()
+    try:
+        pending = db.query(Part).filter(Part.status == "draft", Part.active == True).all()  # noqa: E712
+        for part in pending:
+            if _has_step(part, "identificacao"):
+                continue
+            prepare_state["processed"] += 1
+            result = await prepare_part(part.id, db)
+            if result.get("status") == "ready_to_publish":
+                prepare_state["ready"] += 1
+            elif result.get("status") == "needs_review":
+                prepare_state["needs_review"] += 1
+    finally:
+        prepare_state.update({"running": False, "done": True})
+        db.close()
+
+
+@router.post("/prepare-pending")
+def prepare_pending(background_tasks: BackgroundTasks):
+    """Identifica peças novas (fotos já otimizadas, esperando identificação),
+    pesquisa preço e deixa prontas pra publicar com 1 clique — NUNCA publica
+    sozinho no ML. Chamado automaticamente a cada N minutos (ver main.py) e
+    também pode ser chamado manualmente (botão 'Verificar agora' no app)."""
+    if prepare_state["running"]:
+        return {"status": "already_running", **prepare_state}
+    background_tasks.add_task(_run_prepare_pending)
+    return {"status": "started"}
+
+
+@router.get("/prepare-pending/status")
+def prepare_pending_status():
+    return prepare_state
 
 
 @router.get("/ml-proxy")

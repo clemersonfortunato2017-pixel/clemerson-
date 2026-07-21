@@ -64,6 +64,52 @@ async def publish_with_reference(part_id: int, data: PublishWithReference, db: S
     return {"primary": result, "fanout": fanout}
 
 
+@router.post("/parts/{part_id}/publish-ready")
+async def publish_ready(part_id: int, db: Session = Depends(get_db)):
+    """O botão de '1 clique' da esteira automática: a peça já foi
+    identificada e teve preço pesquisado sozinha (status='ready_to_publish',
+    ver auto_listing.py) — aqui só lê o reference_listing_id/family_name já
+    decididos e efetivamente publica. Esta é a ÚNICA etapa que cria o
+    anúncio de verdade no ML, e por isso sempre precisa desse clique humano
+    (decisão do Clemerson em 2026-07-20: identificação/preço podem rodar
+    sozinhos, publicar não)."""
+    part = db.query(Part).filter(Part.id == part_id).first()
+    if not part:
+        raise HTTPException(404, "Peça não encontrada")
+    if part.status != "ready_to_publish":
+        raise HTTPException(400, f"Peça não está pronta pra publicar (status atual: {part.status})")
+
+    prep = next((s["detail"] for s in reversed(part.pipeline_log or []) if s.get("step") == "pronto_pra_publicar"), None)
+    if not prep or not prep.get("reference_listing_id"):
+        raise HTTPException(400, "Peça não tem referência de categoria preparada")
+
+    reference = await _fetch_ml_item_detail(prep["reference_listing_id"], db)
+    if not reference:
+        raise HTTPException(404, "Anúncio de referência não encontrado no ML")
+    reference["pictures"] = []
+    if prep.get("family_name_override"):
+        reference["family_name"] = prep["family_name_override"]
+
+    account = await _ml_legacy_account(db)
+    if not account:
+        raise HTTPException(400, "Conta ML principal não conectada")
+
+    result = await MercadoLivrePlatform().publish(part, account, reference=reference)
+    if "listing_id" not in result:
+        raise HTTPException(400, f"ML recusou: {result.get('error')}")
+
+    listing = MarketplaceListing(
+        part_id=part.id, marketplace="mercadolivre", listing_id=result["listing_id"],
+        url=result.get("url", ""), status="active", price=part.sale_price,
+    )
+    db.add(listing)
+    part.status = "published"
+    db.commit()
+
+    fanout = await publish_to_all_accounts(part_id, db)
+    return {"primary": result, "fanout": fanout}
+
+
 @router.get("/status")
 async def platforms_status(db: Session = Depends(get_db)):
     """Lista todas as plataformas, quantas contas ativas cada uma tem

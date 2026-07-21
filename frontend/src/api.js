@@ -38,6 +38,8 @@ export const uploadPhotos = (files) => {
   return api.post('/parts/upload-photos', form, { headers: { 'Content-Type': 'multipart/form-data' } }).then(r => r.data)
 }
 export const getDailyReport = (date) => api.get('/reports/daily', { params: date ? { date } : {} }).then(r => r.data)
+export const publishReady = (id) => api.post(`/platforms/parts/${id}/publish-ready`).then(r => r.data)
+export const preparePendingNow = () => api.post('/import/prepare-pending').then(r => r.data)
 
 export const getParts = (params) => api.get('/parts/', { params }).then(r => r.data)
 export const getPart = (id) => api.get(`/parts/${id}`).then(r => r.data)

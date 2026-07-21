@@ -1,12 +1,14 @@
 import os
+import asyncio
 from pathlib import Path
 from sqlalchemy import text
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from app.database import Base, engine
+from app.database import Base, engine, SessionLocal
 from app.config import settings
 from app.models import platform_account  # noqa: F401 — registra PlatformAccount/PlatformSyncLog no Base.metadata
+from app.models.part import Part
 from app.routes import (
     parts, import_ml, sales, compatibility, webhooks, platforms, feed, auth,
     internal, reports, platform_accounts,
@@ -59,6 +61,39 @@ app.include_router(webhooks.router)
 app.include_router(platforms.router)
 app.include_router(platform_accounts.router)
 app.include_router(feed.router)
+
+async def _auto_prepare_loop():
+    """Roda dentro do próprio servidor, pra sempre, sem precisar de sessão de
+    chat nenhuma aberta — a cada 10 min olha se tem peça esperando
+    identificação e já deixa pronta (título/preço/compatibilidade), nunca
+    publica sozinha (isso é sempre um clique do usuário, ver
+    /platforms/parts/{id}/publish-ready). Decisão do Clemerson em
+    2026-07-20: a esteira tem que andar sozinha sem ele precisar pedir."""
+    from app.services.auto_listing import prepare_part
+
+    while True:
+        await asyncio.sleep(600)
+        if not settings.anthropic_api_key:
+            continue
+        db = SessionLocal()
+        try:
+            pending = db.query(Part).filter(Part.status == "draft", Part.active == True).all()  # noqa: E712
+            for part in pending:
+                already = any(s.get("step") == "identificacao" for s in (part.pipeline_log or []))
+                if already:
+                    continue
+                try:
+                    await prepare_part(part.id, db)
+                except Exception:
+                    pass
+        finally:
+            db.close()
+
+
+@app.on_event("startup")
+async def _start_background_jobs():
+    asyncio.create_task(_auto_prepare_loop())
+
 
 @app.get("/")
 def root():

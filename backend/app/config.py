@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     shopee_partner_id: str = ""
     shopee_partner_key: str = ""
     shopee_default_category_id: str = ""  # category_id padrão pra autopeças usadas — mapear antes de publicar de verdade
+    anthropic_api_key: str = ""  # esteira automática: identificação por foto + pesquisa de preço, roda sozinha no servidor
 
     class Config:
         env_file = ".env"

@@ -1,10 +1,99 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { getDailyReport } from '../api'
-import { CheckCircle2, XCircle, Calendar, Camera } from 'lucide-react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { getDailyReport, getParts, publishReady, preparePendingNow } from '../api'
+import { CheckCircle2, XCircle, Calendar, Camera, Sparkles, AlertTriangle, Loader2 } from 'lucide-react'
 import PhotoUploadModal from '../components/PhotoUploadModal'
 
 const todayStr = () => new Date().toISOString().slice(0, 10)
+
+function ReadyToPublish() {
+  const qc = useQueryClient()
+  const { data: ready } = useQuery({
+    queryKey: ['parts', 'ready_to_publish'],
+    queryFn: () => getParts({ status: 'ready_to_publish', limit: 50 }),
+    refetchInterval: 30000,
+  })
+  const { data: review } = useQuery({
+    queryKey: ['parts', 'needs_review'],
+    queryFn: () => getParts({ status: 'needs_review', limit: 50 }),
+    refetchInterval: 30000,
+  })
+
+  const publishMutation = useMutation({
+    mutationFn: publishReady,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['parts'] })
+      qc.invalidateQueries({ queryKey: ['daily-report'] })
+    },
+  })
+
+  const checkNowMutation = useMutation({
+    mutationFn: preparePendingNow,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['parts'] }),
+  })
+
+  const readyItems = ready?.items || []
+  const reviewItems = review?.items || []
+
+  if (readyItems.length === 0 && reviewItems.length === 0) return null
+
+  return (
+    <div className="mb-6 space-y-3">
+      {readyItems.length > 0 && (
+        <div className="bg-green-50 border border-green-200 rounded-xl p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Sparkles size={16} className="text-green-600" />
+            <h2 className="text-sm font-semibold text-green-800">
+              {readyItems.length} peça(s) identificada(s) sozinha — pronta(s) pra publicar
+            </h2>
+          </div>
+          <div className="space-y-2">
+            {readyItems.map((p) => (
+              <div key={p.id} className="flex items-center justify-between bg-white rounded-lg px-3 py-2 border border-green-100">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-gray-800 truncate">{p.title}</p>
+                  <p className="text-xs text-gray-500">{(p.sale_price || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
+                </div>
+                <button
+                  onClick={() => publishMutation.mutate(p.id)}
+                  disabled={publishMutation.isPending}
+                  className="flex items-center gap-1 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded-lg ml-2 shrink-0"
+                >
+                  {publishMutation.isPending && publishMutation.variables === p.id ? <Loader2 size={12} className="animate-spin" /> : null}
+                  Publicar
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {reviewItems.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <AlertTriangle size={16} className="text-amber-600" />
+            <h2 className="text-sm font-semibold text-amber-800">
+              {reviewItems.length} peça(s) precisam de revisão manual
+            </h2>
+          </div>
+          <div className="space-y-1">
+            {reviewItems.map((p) => (
+              <p key={p.id} className="text-sm text-amber-900">{p.title || `Peça #${p.id}`}</p>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <button
+        onClick={() => checkNowMutation.mutate()}
+        disabled={checkNowMutation.isPending}
+        className="text-xs text-gray-500 hover:text-gray-700 underline"
+      >
+        {checkNowMutation.isPending ? 'Verificando...' : 'Verificar peças pendentes agora'}
+      </button>
+    </div>
+  )
+}
 
 export default function DailyReport() {
   const [date, setDate] = useState(todayStr())
@@ -29,6 +118,8 @@ export default function DailyReport() {
         className="w-full md:w-auto flex items-center justify-center gap-2 bg-orange-500 hover:bg-orange-600 text-white px-5 py-3 rounded-lg text-sm font-medium transition-colors mb-6">
         <Camera size={18} /> Tirar foto — anunciar sozinho
       </button>
+
+      <ReadyToPublish />
 
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-sm font-semibold text-gray-700">Relatório do dia</h2>
