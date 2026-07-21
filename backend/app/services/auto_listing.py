@@ -71,6 +71,9 @@ async def identify_part(client: httpx.AsyncClient, photo_urls: list[str]) -> dic
             '"condition": "used ou new", '
             '"title": "título comercial curto no padrão ML, até 60 caracteres, '
             'ex: Comando Seta Limpador C Anel Airbag Ford Ka 2018 A 2021", '
+            '"description": "descrição de anúncio pra Mercado Livre, 3-5 linhas: o que é a '
+            'peça, condição (peça usada, testada/funcionando), compatibilidade, aviso de '
+            'conferir compatibilidade antes de comprar. Tom direto de loja de autopeças.", '
             '"confidence": "high, medium ou low"}'
         ),
     })
@@ -168,6 +171,7 @@ async def prepare_part(part_id: int, db: Session) -> dict:
     _log_step(part, "referencia", reference or "nenhuma encontrada — precisa de decisão manual de categoria")
 
     part.title = (ident.get("title") or ident.get("part_type") or part.title)[:60]
+    part.description = ident.get("description")
     part.brand = ident.get("brand")
     part.condition = ident.get("condition") or "used"
     part.code_oem = ident.get("code_oem")

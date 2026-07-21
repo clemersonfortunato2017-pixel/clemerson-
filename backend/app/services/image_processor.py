@@ -26,30 +26,67 @@ QUALIDADE = 88
 # não é mais um aperto de memória: com o plano Hobby (até 48GB/serviço) o
 # gargalo de RAM que forçou downscale agressivo + modelo leve não existe mais.
 MAX_ENTRADA = (2000, 2000)
+# Faixa aceitável de área ocupada pelo recorte (fração do total de pixels).
+# Fora disso o rembg claramente falhou (apagou a peça quase inteira, ou não
+# tirou nada) — visto em peças reais em 2026-07-21: fotos saíram praticamente
+# em branco, só uma sombra fantasma da peça. Nesses casos usa a foto original
+# sem remoção de fundo em vez de publicar uma imagem inútil.
+AREA_MIN_FRACAO = 0.03
+AREA_MAX_FRACAO = 0.98
+PADDING_FRACAO = 0.06  # margem ao redor da peça depois de recortar pelo bounding box
 
 
-def _remover_fundo(img: Image.Image, session) -> Image.Image:
+def _remover_fundo(img: Image.Image, session) -> Image.Image | None:
+    """Retorna a imagem com fundo removido (RGBA), ou None se o recorte saiu
+    claramente errado (área da peça fora da faixa aceitável)."""
     if not REMBG_OK:
-        return img.convert("RGBA")
+        return None
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
     resultado = rembg_remove(buf.read(), session=session)
-    return Image.open(io.BytesIO(resultado)).convert("RGBA")
+    sem_fundo = Image.open(io.BytesIO(resultado)).convert("RGBA")
+
+    alpha = sem_fundo.split()[3]
+    bbox = alpha.getbbox()
+    if bbox is None:
+        return None
+    area_frac = ((bbox[2] - bbox[0]) * (bbox[3] - bbox[1])) / (sem_fundo.width * sem_fundo.height)
+    if area_frac < AREA_MIN_FRACAO or area_frac > AREA_MAX_FRACAO:
+        return None
+    return sem_fundo
 
 
 def otimizar_imagem(origem: Path, destino: Path, session) -> Path:
-    """Remove fundo, centraliza em canvas 1000x1000 branco, salva JPEG <10MB."""
+    """Remove fundo (com fallback pra foto original se o recorte falhar),
+    recorta pelo bounding box da peça e centraliza em canvas 1000x1000
+    branco, salva JPEG <10MB."""
     with Image.open(origem) as img:
         img = img.convert("RGB")
         img.thumbnail(MAX_ENTRADA, Image.LANCZOS)
         img_sem_fundo = _remover_fundo(img, session)
 
-        fundo = Image.new("RGBA", img_sem_fundo.size, (255, 255, 255, 255))
-        fundo.paste(img_sem_fundo, mask=img_sem_fundo.split()[3])
-        img_final = fundo.convert("RGB")
-        img_sem_fundo.close()
-        fundo.close()
+        if img_sem_fundo is not None:
+            alpha = img_sem_fundo.split()[3]
+            bbox = alpha.getbbox()
+            pad_x = int((bbox[2] - bbox[0]) * PADDING_FRACAO)
+            pad_y = int((bbox[3] - bbox[1]) * PADDING_FRACAO)
+            crop_box = (
+                max(0, bbox[0] - pad_x), max(0, bbox[1] - pad_y),
+                min(img_sem_fundo.width, bbox[2] + pad_x), min(img_sem_fundo.height, bbox[3] + pad_y),
+            )
+            recorte = img_sem_fundo.crop(crop_box)
+            fundo = Image.new("RGBA", recorte.size, (255, 255, 255, 255))
+            fundo.paste(recorte, mask=recorte.split()[3])
+            img_final = fundo.convert("RGB")
+            recorte.close()
+            fundo.close()
+            img_sem_fundo.close()
+        else:
+            # rembg indisponível ou recorte claramente errado — melhor
+            # publicar a foto original (com fundo) do que uma imagem em
+            # branco/apagada.
+            img_final = img.copy()
 
         img_final.thumbnail(TAMANHO_ALVO, Image.LANCZOS)
 
@@ -77,13 +114,13 @@ def processar_fotos_peca(part_id: int, arquivos_originais: list[Path], uploads_d
     todas as fotos do lote — carregar o modelo de novo a cada foto (8x numa
     peça) multiplicava a memória usada à toa."""
     saida_dir = uploads_dir / str(part_id) / "otimizadas"
-    # u2net (modelo completo) — voltou depois do upgrade pro plano Hobby.
-    # u2netp (versão "lite", ~40x menor) foi usado temporariamente pra
-    # contornar falta de memória no plano trial, mas o recorte sai com
-    # contorno impreciso/borrado (relatado pelo Clemerson no anúncio do
-    # Ford Ka). Com RAM de sobra agora, não há razão pra manter a versão
-    # mais fraca.
-    session = new_session("u2net") if REMBG_OK else None
+    # isnet-general-use: qualidade de recorte sensivelmente melhor que u2net
+    # pra objetos em geral (bordas mais precisas, menos falha em peça escura/
+    # reflexiva) — visto em teste real 2026-07-21 que u2net às vezes apagava
+    # a peça quase inteira (fundo e peça confundidos). u2net (modelo
+    # completo, antes usado aqui) voltou a rodar depois do upgrade pro plano
+    # Hobby; u2netp ("lite") foi descartado antes por recorte impreciso.
+    session = new_session("isnet-general-use") if REMBG_OK else None
 
     resultados = []
     for origem in arquivos_originais:

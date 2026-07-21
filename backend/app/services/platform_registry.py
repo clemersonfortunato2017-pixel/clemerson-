@@ -282,6 +282,19 @@ class MercadoLivrePlatform(PlatformBase):
             r = await client.post("https://api.mercadolibre.com/items", json=payload, headers=headers)
             if r.status_code in (200, 201):
                 data = r.json()
+                # A descrição do ML NÃO faz parte do payload de criação do item —
+                # é um endpoint separado. Sem essa chamada extra, a descrição nunca
+                # ia pro anúncio (silenciosamente ignorada, sem erro nenhum).
+                desc_text = (part.description or part.notes or "").strip()
+                if desc_text:
+                    try:
+                        await client.post(
+                            f"https://api.mercadolibre.com/items/{data['id']}/description",
+                            json={"plain_text": desc_text[:50000]},
+                            headers=headers,
+                        )
+                    except Exception:
+                        pass
                 return {"listing_id": data["id"], "url": data.get("permalink", "")}
             return {"error": f"ML {r.status_code}: {r.text[:400]}"}
 
