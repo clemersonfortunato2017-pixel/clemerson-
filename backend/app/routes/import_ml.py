@@ -170,3 +170,15 @@ async def ml_get_proxy(path: str, db: Session = Depends(get_db)):
     async with httpx.AsyncClient(timeout=20) as client:
         r = await client.get(f"https://api.mercadolibre.com/{path.lstrip('/')}", headers=headers)
     return {"status_code": r.status_code, "body": r.json() if r.headers.get("content-type", "").startswith("application/json") else r.text[:2000]}
+
+
+@router.post("/ml-proxy-post")
+async def ml_post_proxy(path: str, body: dict, db: Session = Depends(get_db)):
+    """Mesma ideia do ml-proxy (GET), mas pra endpoints POST que são só
+    consulta/contagem (ex: count_family_products) — usado só pra descobrir o
+    formato certo de attribute id/value antes de gravar de verdade."""
+    user_id, token = await get_valid_access_token(db)
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.post(f"https://api.mercadolibre.com/{path.lstrip('/')}", headers=headers, json=body)
+    return {"status_code": r.status_code, "body": r.json() if r.headers.get("content-type", "").startswith("application/json") else r.text[:2000]}
