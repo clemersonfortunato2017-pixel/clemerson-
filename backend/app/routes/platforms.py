@@ -1,3 +1,4 @@
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -15,6 +16,7 @@ router = APIRouter(prefix="/platforms", tags=["platforms"], dependencies=[Depend
 
 class PublishWithReference(BaseModel):
     reference_listing_id: str
+    family_name_override: Optional[str] = None
 
 
 @router.post("/parts/{part_id}/publish-with-reference")
@@ -25,7 +27,13 @@ async def publish_with_reference(part_id: int, data: PublishWithReference, db: S
     algo que já vendemos, mas essa unidade física em si nunca foi publicada
     (então `publish_to_all_accounts` não tem nenhum listing próprio pra
     montar `reference` sozinho). Usa sempre as FOTOS da peça nova (nunca as
-    da referência)."""
+    da referência).
+
+    `family_name_override`: quando a peça referência é de marca/modelo
+    diferente (mesma categoria de produto, veículo diferente), o family_name
+    da referência vem com o nome do OUTRO veículo — passar aqui o family_name
+    certo pra essa peça (senão o título/família do anúncio sai com o carro
+    errado, mesmo com os atributos BRAND/PART_NUMBER corretos)."""
     part = db.query(Part).filter(Part.id == part_id).first()
     if not part:
         raise HTTPException(404, "Peça não encontrada")
@@ -34,6 +42,8 @@ async def publish_with_reference(part_id: int, data: PublishWithReference, db: S
     if not reference:
         raise HTTPException(404, "Anúncio de referência não encontrado no ML")
     reference["pictures"] = []  # força usar as fotos da própria peça nova
+    if data.family_name_override:
+        reference["family_name"] = data.family_name_override
 
     account = await _ml_legacy_account(db)
     if not account:
@@ -100,6 +110,15 @@ async def sold_at_counter(part_id: int, db: Session = Depends(get_db)):
         "qty_removed": qty_sold,
         "platforms": platform_results,
     }
+
+
+@router.post("/parts/{part_id}/close-all")
+async def close_all(part_id: int, db: Session = Depends(get_db)):
+    """Fecha os anúncios ativos da peça em todas as contas/plataformas SEM
+    zerar estoque nem marcar a peça inativa — usado pra desfazer uma
+    publicação errada (ex: título/atributo saiu errado) antes de corrigir e
+    publicar de novo, sem perder a peça do estoque no processo."""
+    return await close_on_all_accounts(part_id, db)
 
 
 @router.post("/parts/{part_id}/reactivate")
