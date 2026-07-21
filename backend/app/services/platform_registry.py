@@ -226,6 +226,19 @@ class MercadoLivrePlatform(PlatformBase):
                     for attr in attributes:
                         if attr["id"] == a["id"]:
                             attr["values"] = a["values"]
+            # Quando a referência é de OUTRA peça (mesmo tipo, unidade física
+            # diferente — ex: mesmo "comando de seta" mas marca/carro
+            # diferente), BRAND e PART_NUMBER não podem vir copiados da
+            # referência, senão o anúncio novo fica com a marca/código da
+            # peça errada. Sobrescreve com os dados da própria peça sendo
+            # publicada quando ela já tiver isso preenchido.
+            for attr in attributes:
+                if attr["id"] == "BRAND" and part.brand:
+                    attr.pop("value_id", None)
+                    attr["value_name"] = part.brand
+                elif attr["id"] == "PART_NUMBER" and part.code_oem:
+                    attr.pop("value_id", None)
+                    attr["value_name"] = part.code_oem
             payload = {
                 "title": part.title[:60],
                 "category_id": reference.get("category_id") or part.category or "MLB3937",
@@ -241,9 +254,12 @@ class MercadoLivrePlatform(PlatformBase):
             }
             # family_name virou obrigatório pra algumas categorias (ex: MLB63464,
             # comando de seta/limpador) — sem isso ML recusa com
-            # "body.required_fields ... family_name" mesmo com category/attrs ok.
+            # "body.required_fields ... family_name". Mas quando presente, o
+            # ML deriva o título da família + atributos sozinho e RECUSA se
+            # `title` também for enviado ("body.invalid_fields ... title").
             if reference.get("family_name"):
                 payload["family_name"] = reference["family_name"]
+                payload.pop("title", None)
         else:
             # Fallback genérico — só serve pra categoria sem atributo
             # obrigatório algum (raro). Sem reference, categorias normais de
