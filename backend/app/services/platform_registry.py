@@ -280,6 +280,15 @@ class MercadoLivrePlatform(PlatformBase):
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         async with httpx.AsyncClient(timeout=30) as client:
             r = await client.post("https://api.mercadolibre.com/items", json=payload, headers=headers)
+            if r.status_code == 400 and "family name is invalid" in r.text and "family_name" in payload:
+                # A conta legada tem "User Products"/family habilitado, mas uma
+                # conta extra (ex: ML pessoa física) pode não ter esse programa
+                # ativado — nesse caso o ML recusa family_name só nela. Refaz
+                # sem family_name, restaurando o title, em vez de falhar a
+                # publicação inteira nessa conta.
+                payload.pop("family_name", None)
+                payload["title"] = part.title[:60]
+                r = await client.post("https://api.mercadolibre.com/items", json=payload, headers=headers)
             if r.status_code in (200, 201):
                 data = r.json()
                 # A descrição do ML NÃO faz parte do payload de criação do item —
