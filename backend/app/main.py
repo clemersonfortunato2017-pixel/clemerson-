@@ -77,10 +77,12 @@ async def _auto_prepare_loop():
             continue
         db = SessionLocal()
         try:
+            from app.models.part import MarketplaceListing
+            listed_ids = {r[0] for r in db.query(MarketplaceListing.part_id).filter(MarketplaceListing.status == "active").all()}
             pending = db.query(Part).filter(Part.status == "draft", Part.active == True).all()  # noqa: E712
             for part in pending:
                 already = any(s.get("step") == "identificacao" for s in (part.pipeline_log or []))
-                if already:
+                if already or part.id in listed_ids:
                     continue
                 try:
                     await prepare_part(part.id, db)

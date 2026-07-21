@@ -126,9 +126,10 @@ async def _run_prepare_pending():
     prepare_state.update({"running": True, "processed": 0, "ready": 0, "needs_review": 0, "done": False})
     db = SessionLocal()
     try:
+        listed_ids = {r[0] for r in db.query(MarketplaceListing.part_id).filter(MarketplaceListing.status == "active").all()}
         pending = db.query(Part).filter(Part.status == "draft", Part.active == True).all()  # noqa: E712
         for part in pending:
-            if _has_step(part, "identificacao"):
+            if _has_step(part, "identificacao") or part.id in listed_ids:
                 continue
             prepare_state["processed"] += 1
             result = await prepare_part(part.id, db)
