@@ -16,7 +16,7 @@ from app.config import settings
 from app.models.part import Part, MarketplaceListing, Vehicle, Compatibility
 
 ANTHROPIC_API = "https://api.anthropic.com/v1/messages"
-MODEL = "claude-haiku-4-5-20251001"  # barato e rápido, suficiente pra extração estruturada
+MODEL = "claude-sonnet-5"  # Haiku errou marca/modelo num teste real (Hyundai Creta virou "Chevrolet Cruze") — Sonnet lê etiqueta/gravação com mais precisão, custo ainda baixo pro volume da loja
 
 
 def _log_step(part: Part, step: str, detail) -> None:
@@ -56,8 +56,13 @@ async def identify_part(client: httpx.AsyncClient, photo_urls: list[str]) -> dic
         "type": "text",
         "text": (
             "Estas são fotos de uma autopeça usada, tiradas por um lojista brasileiro pra "
-            "anunciar no Mercado Livre. Identifique a peça e o(s) veículo(s) compatível(is) "
-            "olhando etiquetas, códigos gravados, formato e função da peça. "
+            "anunciar no Mercado Livre. Identifique a peça e o(s) veículo(s) compatível(is). "
+            "IMPORTANTE: se houver texto escrito à mão (caneta/marcador) ou etiqueta/código "
+            "gravado na peça indicando o veículo, isso é a fonte MAIS confiável — use isso "
+            "antes de tentar adivinhar pela forma/desenho da peça (peças de tipos parecidos "
+            "existem pra marcas diferentes, é fácil confundir só pelo formato). "
+            "Se não conseguir ler nenhum texto/código com clareza, marque confidence como "
+            "'low' em vez de arriscar um palpite. "
             "Responda APENAS com um JSON (sem texto antes/depois) no formato:\n"
             '{"part_type": "nome genérico da peça (ex: Comando Seta Limpador)", '
             '"brand": "marca do veículo", "model": "modelo do veículo", '
@@ -88,7 +93,7 @@ async def research_price(client: httpx.AsyncClient, query: str) -> dict:
     try:
         return _extract_json(text)
     except Exception:
-        return {"suggested_price": None, "prices_found": [], "source_note": "pesquisa falhou"}
+        return {"suggested_price": None, "prices_found": [], "source_note": f"pesquisa falhou — resposta: {text[:300]}"}
 
 
 def find_catalog_reference(db: Session, part_type: str, brand: str) -> dict | None:
