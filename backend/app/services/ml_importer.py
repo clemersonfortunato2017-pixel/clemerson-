@@ -187,14 +187,19 @@ async def push_part_compatibility_to_ml(part_id: int, listing_id: str, db: Sessi
     """Envia pro ML a compatibilidade de veículos que o Pitbox já tem no banco
     pra essa peça — sem isso o anúncio fica sem 'ficha técnica' e o ML marca
     'Inativo para revisar / Não indica os veículos compatíveis' depois de uns
-    dias (visto em anúncios reais em 2026-07-20). Espelha o mesmo shape que
-    sync_part_compatibility já lê de volta (attributes com id/value_name),
-    então fica simétrico com o import."""
+    dias (visto em anúncios reais em 2026-07-20).
+
+    Formato correto descoberto na documentação oficial (a 1ª tentativa, com
+    {"compatibilities": [{"attributes": ...}]}, é da API antiga e o ML recusa
+    com "products, products_groups, products_families, universal ou item to
+    copy" ausentes): precisa do wrapper `products_families`, com `domain_id`
+    do domínio de veículos e `creation_source` (obrigatório desde a mudança
+    de política do ML)."""
     compats = db.query(Compatibility).filter(Compatibility.part_id == part_id).all()
     if not compats:
         return {"skipped": "peça sem compatibilidade cadastrada no Pitbox"}
 
-    entries = []
+    families = []
     for c in compats:
         v = db.query(Vehicle).filter(Vehicle.id == c.vehicle_id).first()
         if not v:
@@ -208,21 +213,25 @@ async def push_part_compatibility_to_ml(part_id: int, listing_id: str, db: Sessi
             attrs.append({"id": "YEARS", "value_name": years})
         if v.engine:
             attrs.append({"id": "ENGINE_VERSION", "value_name": v.engine})
-        entries.append({"attributes": attrs})
+        families.append({
+            "domain_id": "MLB-CARS_AND_VANS",
+            "creation_source": "DEFAULT",
+            "attributes": attrs,
+        })
 
-    if not entries:
+    if not families:
         return {"skipped": "nenhum veículo válido pra enviar"}
 
     r = await client.post(
         f"{ML_API}/items/{listing_id}/compatibilities",
         headers=headers,
-        json={"compatibilities": entries},
+        json={"products_families": families},
         timeout=20,
     )
     return {
         "status_code": r.status_code,
         "ok": r.status_code in (200, 201),
-        "sent": entries,
+        "sent": families,
         "response": r.json() if r.headers.get("content-type", "").startswith("application/json") else r.text[:500],
     }
 
