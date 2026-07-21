@@ -139,7 +139,9 @@ async def prepare_part(part_id: int, db: Session) -> dict:
         try:
             ident = await identify_part(client, part.photos)
         except Exception as e:
-            _log_step(part, "identificacao", f"erro: {e}")
+            import traceback
+            tb = traceback.format_exc()
+            _log_step(part, "identificacao", f"erro: {e} | {tb[-800:]}")
             part.status = "error"
             db.commit()
             return {"error": str(e)}
