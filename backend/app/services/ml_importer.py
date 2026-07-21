@@ -222,16 +222,39 @@ async def push_part_compatibility_to_ml(part_id: int, listing_id: str, db: Sessi
     if not families:
         return {"skipped": "nenhum veículo válido pra enviar"}
 
-    r = await client.post(
-        f"{ML_API}/items/{listing_id}/compatibilities",
-        headers=headers,
-        json={"products_families": families},
-        timeout=20,
-    )
+    # Itens marcados "User Product" (tag user_product_listing) recusam o
+    # endpoint clássico /items/{id}/compatibilities com "has User Product
+    # compatibilities. Use the corresponding User Product resources." —
+    # precisam do endpoint /user-products/{up_id}/compatibilities, com
+    # domain_id/category_id fora da lista de products_families.
+    item_r = await client.get(f"{ML_API}/items/{listing_id}", headers=headers, timeout=15)
+    item = item_r.json() if item_r.status_code == 200 else {}
+    user_product_id = item.get("user_product_id")
+
+    if user_product_id:
+        body = {
+            "domain_id": "MLB-CARS_AND_VANS",
+            "category_id": item.get("category_id"),
+            "products_families": families,
+        }
+        r = await client.post(
+            f"{ML_API}/user-products/{user_product_id}/compatibilities",
+            headers=headers,
+            json=body,
+            timeout=20,
+        )
+    else:
+        r = await client.post(
+            f"{ML_API}/items/{listing_id}/compatibilities",
+            headers=headers,
+            json={"products_families": families},
+            timeout=20,
+        )
     return {
         "status_code": r.status_code,
         "ok": r.status_code in (200, 201),
         "sent": families,
+        "user_product_id": user_product_id,
         "response": r.json() if r.headers.get("content-type", "").startswith("application/json") else r.text[:500],
     }
 
