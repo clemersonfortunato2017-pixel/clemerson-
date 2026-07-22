@@ -11,6 +11,11 @@ class Sale(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     platform = Column(String(50), nullable=False, index=True)
+    # Multi-conta: qual PlatformAccount recebeu esse pedido — NULL = conta
+    # legada/principal (mesma convenção de MarketplaceListing.platform_account_id).
+    # Sem isso, vendas de contas diferentes da mesma plataforma (ex: ML PJ e
+    # PF) ficavam misturadas num único total, sem como separar por conta.
+    platform_account_id = Column(Integer, ForeignKey("platform_accounts.id"), nullable=True)
     platform_order_id = Column(String(100), unique=True, index=True, nullable=True)
     buyer_name = Column(String(200))
     buyer_phone = Column(String(30))

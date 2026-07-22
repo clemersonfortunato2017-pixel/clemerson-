@@ -127,6 +127,17 @@ export default function Financial() {
             {(fin?.[p]?.profit || 0) > 0 && (
               <p className="text-xs text-green-600 mt-0.5">Lucro: {fmt(fin?.[p]?.profit)}</p>
             )}
+            {/* Quebra por conta (ex: ML pessoa jurídica x pessoa física) — só mostra se houver mais de 1 conta */}
+            {(fin?.[`${p}_contas`]?.length > 1) && (
+              <div className="mt-3 pt-3 border-t border-gray-100 space-y-1.5">
+                {fin[`${p}_contas`].map((c, i) => (
+                  <div key={i} className="flex items-center justify-between text-xs">
+                    <span className="text-gray-500 truncate mr-2">{c.label}</span>
+                    <span className="text-gray-700 font-medium flex-shrink-0">{fmt(c.total)} <span className="text-gray-400 font-normal">({c.count})</span></span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         ))}
       </div>

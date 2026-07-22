@@ -162,8 +162,21 @@ def _completed_sales_in_month(db: Session, m: int, y: int) -> list[Sale]:
     ).all()
 
 
+async def _account_labels(db: Session) -> dict[tuple[str, int | None], str]:
+    """Mapa (plataforma, account_id) -> rótulo — account_id None é sempre a
+    conta legada/principal. Usado pra quebrar o financeiro por conta dentro
+    de uma mesma plataforma (ex: ML pessoa jurídica x pessoa física), que
+    até 2026-07-22 ficavam misturados num único total sem como separar."""
+    from app.services.platform_registry import get_accounts_for_platform
+    labels: dict[tuple[str, int | None], str] = {}
+    for plataforma in ("mercadolivre", "shopee"):
+        for acc in await get_accounts_for_platform(plataforma, db):
+            labels[(plataforma, acc.get("account_id"))] = acc["label"]
+    return labels
+
+
 @router.get("/financial/monthly")
-def monthly_financial(
+async def monthly_financial(
     month: Optional[int] = None,
     year: Optional[int] = None,
     db: Session = Depends(get_db),
@@ -175,6 +188,9 @@ def monthly_financial(
     platforms = ["mercadolivre", "shopee", "amazon", "balcao"]
     result = {p: {"total": 0.0, "count": 0, "net": 0.0, "profit": 0.0, "fees": 0.0} for p in platforms}
     grand_total = grand_net = grand_profit = 0.0
+
+    labels = await _account_labels(db)
+    por_conta: dict[str, dict[int | None, dict]] = {"mercadolivre": {}, "shopee": {}}
 
     for sale in _completed_sales_in_month(db, m, y):
         p = result.get(sale.platform)
@@ -188,6 +204,19 @@ def monthly_financial(
         grand_total += sale.total or 0
         grand_net += sale.net_total or 0
         grand_profit += sale.profit or 0
+
+        if sale.platform in por_conta:
+            conta = por_conta[sale.platform].setdefault(sale.platform_account_id, {
+                "label": labels.get((sale.platform, sale.platform_account_id), "Conta removida/desconhecida"),
+                "total": 0.0, "count": 0, "net": 0.0, "profit": 0.0,
+            })
+            conta["total"] += sale.total or 0
+            conta["count"] += 1
+            conta["net"] += sale.net_total or 0
+            conta["profit"] += sale.profit or 0
+
+    for plataforma, contas in por_conta.items():
+        result[f"{plataforma}_contas"] = sorted(contas.values(), key=lambda c: -c["total"])
 
     result["total"] = grand_total
     result["net_total"] = grand_net

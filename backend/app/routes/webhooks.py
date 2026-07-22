@@ -99,6 +99,7 @@ async def ml_webhook(request: Request, background_tasks: BackgroundTasks, db: Se
 
     sale = Sale(
         platform="mercadolivre",
+        platform_account_id=account.get("account_id") if account else None,
         platform_order_id=order_id,
         buyer_name=order.get("buyer", {}).get("nickname", ""),
         total=total,
@@ -199,6 +200,7 @@ async def shopee_webhook(request: Request, background_tasks: BackgroundTasks, db
 
     sale = Sale(
         platform="shopee",
+        platform_account_id=account.get("account_id"),
         platform_order_id=order_sn,
         buyer_name=order.get("buyer_username", ""),
         total=total,

@@ -28,6 +28,7 @@ def _migrate_new_columns():
         "ALTER TABLE vehicles ADD COLUMN ref_photo_url VARCHAR(500)",
         "ALTER TABLE vehicles ADD COLUMN ml_brand_value_id VARCHAR(50)",
         "ALTER TABLE vehicles ADD COLUMN ml_model_value_id VARCHAR(50)",
+        "ALTER TABLE sales ADD COLUMN platform_account_id INTEGER",
     ]
     with engine.connect() as conn:
         for stmt in stmts:
