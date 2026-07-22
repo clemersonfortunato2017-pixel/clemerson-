@@ -11,8 +11,8 @@ from typing import Optional
 from app.database import get_db
 from app.models.part import Part, MarketplaceListing
 from app.models.sale import Sale, SaleItem
-from app.services.ml_importer import get_item_visits
-from app.services.platform_registry import resolve_account_for_listing
+from app.services.ml_importer import get_item_visits, fetch_all_item_ids
+from app.services.platform_registry import get_accounts_for_platform
 from app.routes.auth import get_current_user
 
 router = APIRouter(prefix="/reports", tags=["reports"], dependencies=[Depends(get_current_user)])
@@ -76,13 +76,42 @@ async def anuncios_status(db: Session = Depends(get_db)):
       média da conta — prioridade de investimento (ads, Full, destaque).
     - saudavel: vendeu nos últimos 30 dias, dentro da média.
     Visitas do ML atualizam com até 48h de atraso (limitação da própria API,
-    não é bug daqui)."""
-    listings = db.query(MarketplaceListing).filter(
-        MarketplaceListing.marketplace == "mercadolivre",
-        MarketplaceListing.status == "active",
-    ).all()
+    não é bug daqui).
+
+    IMPORTANTE: o campo status do MarketplaceListing local pode estar
+    desatualizado (visto hoje, 2026-07-21: banco mostrava ~700 "ativos", API
+    real da conta PJ mostrou só 349) — por isso este endpoint sempre cruza
+    com a lista real de itens ativos da API antes de classificar, igual foi
+    feito na publicação em massa da conta PF."""
+    local_listings = db.query(MarketplaceListing).filter(MarketplaceListing.marketplace == "mercadolivre").all()
+    if not local_listings:
+        return {"parado_visibilidade": [], "parado_conversao": [], "estrela": [], "saudavel": [], "desatualizados": [], "media_conta": {}}
+
+    # Fonte de verdade: IDs realmente ativos na API, por conta (não confiar
+    # no status salvo localmente).
+    accounts = await get_accounts_for_platform("mercadolivre", db)
+    real_active_ids: set[str] = set()
+    account_by_external_id: dict[str, dict] = {}
+    async with httpx.AsyncClient(timeout=30) as client:
+        for account in accounts:
+            if not account.get("external_id") or not account.get("access_token"):
+                continue
+            headers = {"Authorization": f"Bearer {account['access_token']}"}
+            try:
+                ids = await fetch_all_item_ids(account["external_id"], headers, client)
+                real_active_ids.update(ids)
+                for iid in ids:
+                    account_by_external_id[iid] = account
+            except Exception:
+                continue
+
+    listings = [l for l in local_listings if l.listing_id in real_active_ids]
+    desatualizados = [
+        {"part_id": l.part_id, "listing_id": l.listing_id, "status_local": l.status}
+        for l in local_listings if l.listing_id not in real_active_ids
+    ]
     if not listings:
-        return {"parado_visibilidade": [], "parado_conversao": [], "estrela": [], "saudavel": [], "media_conta": {}}
+        return {"parado_visibilidade": [], "parado_conversao": [], "estrela": [], "saudavel": [], "desatualizados": desatualizados, "media_conta": {}}
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
 
@@ -103,17 +132,14 @@ async def anuncios_status(db: Session = Depends(get_db)):
     all_margins = [m for ms in margin_by_part.values() for m in ms]
     avg_margin = (sum(all_margins) / len(all_margins)) if all_margins else 0
 
-    # Resolve a conta certa por anúncio ANTES de buscar visita — anúncio da
-    # conta PF só pode ser consultado com o token da PF, não o da PJ
-    # (legada). Sem isso, visita de anúncio PF sempre voltaria 0/erro.
-    accounts_by_listing: dict[int, Optional[dict]] = {}
-    for listing in listings:
-        accounts_by_listing[listing.id] = await resolve_account_for_listing(listing, db)
-
+    # Conta dona de cada anúncio já resolvida acima (account_by_external_id,
+    # montada a partir da mesma busca real que confirmou o item ativo) —
+    # anúncio da conta PF só pode ser consultado com o token da PF, não o da
+    # PJ (legada). Sem isso, visita de anúncio PF sempre voltaria 0/erro.
     sem = asyncio.Semaphore(5)
 
     async def visits_for(listing: MarketplaceListing) -> int:
-        account = accounts_by_listing.get(listing.id)
+        account = account_by_external_id.get(listing.listing_id)
         if not account or not account.get("access_token"):
             return 0
         headers = {"Authorization": f"Bearer {account['access_token']}"}
@@ -128,7 +154,7 @@ async def anuncios_status(db: Session = Depends(get_db)):
         part = db.query(Part).filter(Part.id == listing.part_id).first()
         if not part:
             continue
-        account = accounts_by_listing.get(listing.id)
+        account = account_by_external_id.get(listing.listing_id)
         last_sale = (
             db.query(func.max(Sale.sold_at))
             .join(SaleItem, SaleItem.sale_id == Sale.id)
@@ -151,4 +177,8 @@ async def anuncios_status(db: Session = Depends(get_db)):
             entry["categoria"] = "estrela" if (qty >= avg_qty and margin >= avg_margin and avg_qty > 0) else "saudavel"
         buckets[entry["categoria"]].append(entry)
 
-    return {**buckets, "media_conta": {"qtd_media_30d": round(avg_qty, 2), "margem_media_30d_pct": round(avg_margin, 2)}}
+    return {
+        **buckets,
+        "desatualizados": desatualizados,
+        "media_conta": {"qtd_media_30d": round(avg_qty, 2), "margem_media_30d_pct": round(avg_margin, 2)},
+    }
