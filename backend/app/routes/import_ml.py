@@ -75,11 +75,17 @@ async def push_compatibility_one(part_id: int, db: Session = Depends(get_db)):
 
 
 async def _run_push_compat(limit: int | None = None):
+    """Multi-conta: cada anúncio pode pertencer a uma conta ML diferente
+    (legada ou extra, ex: pessoa física) — usar sempre o token da conta
+    DONA do anúncio (resolve_account_for_listing), nunca um token fixo.
+    Sem isso, todo anúncio de uma conta que não seja a legada recusa com
+    403 'Unauthorized access to resource' (confirmado na prática:
+    27 de 30 erros no primeiro teste em lote eram exatamente isso)."""
+    from app.services.platform_registry import resolve_account_for_listing
+
     push_compat_state.update({"running": True, "processed": 0, "pushed": 0, "skipped": 0, "errors": [], "done": False})
     db = SessionLocal()
     try:
-        user_id, token = await get_valid_access_token(db)
-        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
         query = db.query(MarketplaceListing).filter(
             MarketplaceListing.marketplace == "mercadolivre", MarketplaceListing.status == "active",
         )
@@ -88,6 +94,11 @@ async def _run_push_compat(limit: int | None = None):
             for listing in listings:
                 push_compat_state["processed"] += 1
                 try:
+                    account = await resolve_account_for_listing(listing, db)
+                    if not account or not account.get("access_token"):
+                        push_compat_state["errors"].append({"part_id": listing.part_id, "listing_id": listing.listing_id, "detail": "conta não resolvida"})
+                        continue
+                    headers = {"Authorization": f"Bearer {account['access_token']}", "Content-Type": "application/json"}
                     result = await push_part_compatibility_to_ml(listing.part_id, listing.listing_id, db, headers, client)
                     if result.get("ok"):
                         push_compat_state["pushed"] += 1

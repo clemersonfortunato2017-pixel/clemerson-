@@ -287,31 +287,38 @@ async def push_part_compatibility_to_ml(part_id: int, listing_id: str, db: Sessi
         body = {"domain_id": "MLB-CARS_AND_VANS", "category_id": category_id, "products_families": lote}
         return await client.post(endpoint, headers=headers, json=body, timeout=30)
 
-    # Tenta tudo de uma vez; se estourar o limite de 200 produtos (modelo
-    # com muitas versões/mercados), refaz 1 ano por vez — nenhum modelo real
-    # chega perto de 200 variações dentro de um único ano.
-    r = await enviar(families)
-    if r.status_code == 400 and "Maximum of 200 products" in r.text:
-        total_criadas = 0
-        erros = []
-        for familia in families:
-            r2 = await enviar([familia])
-            if r2.status_code in (200, 201):
-                total_criadas += r2.json().get("created_compatibilities_count", 0)
-            else:
-                erros.append({"familia": familia, "status": r2.status_code, "resposta": r2.text[:300]})
-        return {
-            "ok": total_criadas > 0, "modo": "por_ano", "created_compatibilities_count": total_criadas,
-            "erros": erros, "pulados": pulados, "user_product_id": user_product_id,
-        }
+    # Duas restrições distintas do ML, confirmadas testando na prática
+    # (2026-07-22): no máximo 10 "products_families" por request
+    # ("size must be between 0 and 10") E no máximo 200 produtos
+    # resolvidos no total ("Maximum of 200 products... consider products
+    # families") — um veículo com muitos anos de compatibilidade estoura a
+    # primeira, um modelo com muitas versões/mercados por ano estoura a
+    # segunda. Processa em lotes de 10 famílias; se um lote estourar o
+    # limite de produtos, refaz esse lote 1 família (ano) por vez.
+    total_criadas = 0
+    erros = []
+    for i in range(0, len(families), 10):
+        lote = families[i:i + 10]
+        r = await enviar(lote)
+        if r.status_code in (200, 201):
+            total_criadas += r.json().get("created_compatibilities_count", 0)
+        elif r.status_code == 400 and "Maximum of 200 products" in r.text:
+            for familia in lote:
+                r2 = await enviar([familia])
+                if r2.status_code in (200, 201):
+                    total_criadas += r2.json().get("created_compatibilities_count", 0)
+                else:
+                    erros.append({"familia": familia, "status": r2.status_code, "resposta": r2.text[:300]})
+        else:
+            erros.append({"lote": lote, "status": r.status_code, "resposta": r.text[:300]})
 
     return {
-        "status_code": r.status_code,
-        "ok": r.status_code in (200, 201),
-        "sent": families,
+        "ok": total_criadas > 0 or (not erros and not families),
+        "created_compatibilities_count": total_criadas,
+        "erros": erros,
         "pulados": pulados,
         "user_product_id": user_product_id,
-        "response": r.json() if r.headers.get("content-type", "").startswith("application/json") else r.text[:500],
+        "response": {"created_compatibilities_count": total_criadas, "erros": erros} if erros else {"created_compatibilities_count": total_criadas},
     }
 
 
