@@ -264,3 +264,97 @@ def audit_descricoes_start(background_tasks: BackgroundTasks):
 @router.get("/audit-descricoes/status")
 def audit_descricoes_status():
     return desc_audit_state
+
+
+backfill_state = {"running": False, "processed": 0, "total": 0, "ok": 0, "erro": [], "amostras": [], "done": True}
+
+
+async def _run_backfill_descricoes(limit: int):
+    """Pra peças publicadas fora da esteira (pipeline_log vazio, sem
+    description em lugar nenhum — ver /audit-descricoes) — gera descrição a
+    partir do título (identify_from_title, sem foto) e empurra pro(s)
+    anúncio(s) ML ativo(s), com a mesma confirmação via GET usada em todo
+    lugar. NÃO toca em título, preço ou fotos."""
+    from app.services.auto_listing import backfill_part_description
+
+    backfill_state.update({"running": True, "processed": 0, "total": 0, "ok": 0, "erro": [], "amostras": [], "done": False})
+    db = SessionLocal()
+    try:
+        candidatos = (
+            db.query(MarketplaceListing.part_id)
+            .filter(MarketplaceListing.marketplace == "mercadolivre", MarketplaceListing.status == "active")
+            .distinct()
+            .all()
+        )
+        part_ids = []
+        for (pid,) in candidatos:
+            part = db.query(Part).filter(Part.id == pid).first()
+            if part and not (part.description or "").strip():
+                part_ids.append(pid)
+            if len(part_ids) >= limit:
+                break
+        backfill_state["total"] = len(part_ids)
+
+        sem = asyncio.Semaphore(4)
+
+        async def processa(part_id: int):
+            async with sem:
+                try:
+                    result = await backfill_part_description(part_id, db)
+                    if "error" in result:
+                        backfill_state["erro"].append({"part_id": part_id, "motivo": result["error"]})
+                        return
+                    part = db.query(Part).filter(Part.id == part_id).first()
+                    listings = db.query(MarketplaceListing).filter(
+                        MarketplaceListing.part_id == part_id,
+                        MarketplaceListing.marketplace == "mercadolivre",
+                        MarketplaceListing.status == "active",
+                    ).all()
+                    push_ok = True
+                    async with httpx.AsyncClient(timeout=20) as client:
+                        for listing in listings:
+                            account = await resolve_account_for_listing(listing, db)
+                            if not account or not account.get("access_token"):
+                                push_ok = False
+                                continue
+                            headers = {"Authorization": f"Bearer {account['access_token']}", "Content-Type": "application/json"}
+                            await client.post(
+                                f"https://api.mercadolibre.com/items/{listing.listing_id}/description",
+                                json={"plain_text": part.description[:50000]}, headers=headers,
+                            )
+                            check = await client.get(f"https://api.mercadolibre.com/items/{listing.listing_id}/description", headers=headers)
+                            if not (check.status_code == 200 and (check.json() or {}).get("plain_text", "").strip()):
+                                push_ok = False
+                    if push_ok:
+                        backfill_state["ok"] += 1
+                        if len(backfill_state["amostras"]) < 5:
+                            backfill_state["amostras"].append({"part_id": part_id, "title": part.title, "description": part.description})
+                    else:
+                        backfill_state["erro"].append({"part_id": part_id, "motivo": "descricao gerada mas push/confirmacao no ML falhou"})
+                except Exception as e:
+                    backfill_state["erro"].append({"part_id": part_id, "motivo": str(e)})
+                finally:
+                    backfill_state["processed"] += 1
+
+        await asyncio.gather(*(processa(pid) for pid in part_ids))
+    finally:
+        backfill_state.update({"running": False, "done": True})
+        db.close()
+
+
+@router.post("/backfill-descricoes")
+def backfill_descricoes_start(background_tasks: BackgroundTasks, limit: int = 5):
+    """Gera e publica descrição (a partir do título, via Claude) pras peças
+    publicadas fora da esteira que não têm nenhuma descrição salva em lugar
+    nenhum. `limit` controla quantas processar nessa chamada — usar um valor
+    pequeno primeiro pra conferir a qualidade antes de rodar o catálogo
+    inteiro."""
+    if backfill_state["running"]:
+        return {"status": "already_running", **backfill_state}
+    background_tasks.add_task(_run_backfill_descricoes, limit)
+    return {"status": "started", "limit": limit}
+
+
+@router.get("/backfill-descricoes/status")
+def backfill_descricoes_status():
+    return backfill_state

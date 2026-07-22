@@ -82,6 +82,63 @@ async def identify_part(client: httpx.AsyncClient, photo_urls: list[str]) -> dic
     return _extract_json(text)
 
 
+async def identify_from_title(client: httpx.AsyncClient, title: str, code_oem: str | None = None) -> dict:
+    """Deriva marca/modelo/ano/compatibilidade e gera descrição a partir só
+    do título — usado pra corrigir peças já publicadas fora da esteira (bulk
+    import de 2026-07-20, pipeline_log vazio) que nunca passaram por
+    identify_part() com foto, então nunca tiveram descrição gerada. Sem
+    imagem disponível pra revalidar o que já está no título, mas o título
+    de um anúncio real já publicado é uma fonte confiável o bastante pra
+    extrair marca/modelo e pesquisar o range completo de compatibilidade."""
+    tools = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}]
+    oem_txt = f' Código OEM conhecido: {code_oem}.' if code_oem else ""
+    messages = [{"role": "user", "content": (
+        f'Este é o título de um anúncio real de autopeça usada no Mercado Livre: "{title}".{oem_txt} '
+        "Extraia o tipo de peça, marca e modelo do veículo, e pesquise (web_search) o range COMPLETO de "
+        "anos/versões compatíveis (não só o que está no título) e o código OEM se ainda não for conhecido. "
+        "Gere também uma descrição de anúncio pra Mercado Livre: 3-5 linhas, sem emojis, sem HTML, tom "
+        "direto de loja de autopeças, SEM mencionar 'usada'/'desmanche'/'retirada de veículo' (o campo de "
+        "condição do ML já informa isso), com a compatibilidade completa listada. "
+        "Responda APENAS com um JSON (sem texto antes/depois):\n"
+        '{"part_type": "...", "brand": "...", "model": "...", "year_start": 2018, "year_end": 2022, '
+        '"code_oem": "código ou null", "description": "descrição completa aqui"}'
+    )}]
+    resp = await _claude_call(client, messages, tools=tools, max_tokens=2048)
+    text = "".join(b.get("text", "") for b in resp.get("content", []) if b.get("type") == "text")
+    return _extract_json(text)
+
+
+async def backfill_part_description(part_id: int, db: Session) -> dict:
+    """Preenche descrição/marca/compatibilidade de uma peça já publicada que
+    nunca passou pela esteira (sem tocar em título, preço ou fotos — só
+    completa o que falta pra cumprir a regra sem exceção de 2026-07-22)."""
+    part = db.query(Part).filter(Part.id == part_id).first()
+    if not part or not part.title:
+        return {"error": "peça não encontrada ou sem título"}
+
+    async with httpx.AsyncClient() as client:
+        try:
+            ident = await identify_from_title(client, part.title, part.code_oem)
+        except Exception as e:
+            _log_step(part, "backfill_descricao", f"erro: {e}")
+            db.commit()
+            return {"error": str(e)}
+
+    _log_step(part, "backfill_descricao", ident)
+    if ident.get("description"):
+        part.description = ident["description"]
+    if ident.get("brand") and not part.brand:
+        part.brand = ident["brand"]
+    if ident.get("code_oem") and not part.code_oem:
+        part.code_oem = ident["code_oem"]
+    if ident.get("brand") and ident.get("model"):
+        vehicle = _get_or_create_vehicle(db, ident["brand"], ident["model"], ident.get("year_start"), ident.get("year_end"))
+        if not db.query(Compatibility).filter_by(part_id=part.id, vehicle_id=vehicle.id).first():
+            db.add(Compatibility(part_id=part.id, vehicle_id=vehicle.id, oem_code=ident.get("code_oem")))
+    db.commit()
+    return {"part_id": part.id, "description": part.description}
+
+
 async def research_price(client: httpx.AsyncClient, query: str) -> dict:
     """Pesquisa preço competitivo real via web search nativo da Anthropic."""
     tools = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}]
