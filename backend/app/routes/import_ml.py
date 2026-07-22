@@ -74,13 +74,17 @@ async def push_compatibility_one(part_id: int, db: Session = Depends(get_db)):
     return {"part_id": part_id, "listing_id": listing.listing_id, **result}
 
 
-async def _run_push_compat(limit: int | None = None):
+async def _run_push_compat(limit: int | None = None, offset: int = 0):
     """Multi-conta: cada anúncio pode pertencer a uma conta ML diferente
     (legada ou extra, ex: pessoa física) — usar sempre o token da conta
     DONA do anúncio (resolve_account_for_listing), nunca um token fixo.
     Sem isso, todo anúncio de uma conta que não seja a legada recusa com
     403 'Unauthorized access to resource' (confirmado na prática:
-    27 de 30 erros no primeiro teste em lote eram exatamente isso)."""
+    27 de 30 erros no primeiro teste em lote eram exatamente isso).
+
+    `offset` pra rodar em lotes sequenciais sem reprocessar sempre os
+    mesmos primeiros N — ordena por id pra ter uma ordem estável entre
+    chamadas (sem ORDER BY, a ordem de retorno não é garantida)."""
     from app.services.platform_registry import resolve_account_for_listing
 
     push_compat_state.update({"running": True, "processed": 0, "pushed": 0, "skipped": 0, "errors": [], "done": False})
@@ -88,7 +92,8 @@ async def _run_push_compat(limit: int | None = None):
     try:
         query = db.query(MarketplaceListing).filter(
             MarketplaceListing.marketplace == "mercadolivre", MarketplaceListing.status == "active",
-        )
+        ).order_by(MarketplaceListing.id)
+        query = query.offset(offset)
         listings = query.limit(limit).all() if limit else query.all()
         async with httpx.AsyncClient(timeout=30) as client:
             for listing in listings:
@@ -117,16 +122,16 @@ async def _run_push_compat(limit: int | None = None):
 
 
 @router.post("/push-compatibility")
-def push_compatibility_all(background_tasks: BackgroundTasks, limit: int | None = None):
+def push_compatibility_all(background_tasks: BackgroundTasks, limit: int | None = None, offset: int = 0):
     """Envia em lote a compatibilidade (já cadastrada no Pitbox) das peças
     com anúncio ML ativo pro ML de verdade — corrige anúncios que caem
     'Inativo para revisar' por falta de ficha técnica de veículos. `limit`
-    processa só as N primeiras (rodar em lotes menores em vez do catálogo
-    inteiro de uma vez)."""
+    processa só as N primeiras a partir de `offset` (rodar em lotes
+    sequenciais menores em vez do catálogo inteiro de uma vez)."""
     if push_compat_state["running"]:
         return {"status": "already_running", **push_compat_state}
-    background_tasks.add_task(_run_push_compat, limit)
-    return {"status": "started", "limit": limit}
+    background_tasks.add_task(_run_push_compat, limit, offset)
+    return {"status": "started", "limit": limit, "offset": offset}
 
 
 @router.get("/push-compatibility/status")
