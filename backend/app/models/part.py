@@ -59,6 +59,13 @@ class Vehicle(Base):
     # pesquisar de novo pra cada peça nova do mesmo modelo (Passo 1B do
     # skill anuncio-ml-autopecas).
     ref_photo_url = Column(String(500))
+    # Cache do value_id numérico de BRAND/MODEL no catálogo do ML (domain
+    # MLB-CARS_AND_VANS) — resolvido via GET /products/search, necessário
+    # pra registrar compatibilidade de verdade (o ML recusa
+    # "No products were found" com value_name em texto livre). Evita
+    # repetir a busca no catálogo pra cada peça do mesmo modelo.
+    ml_brand_value_id = Column(String(50))
+    ml_model_value_id = Column(String(50))
 
     compatibilities = relationship("Compatibility", back_populates="vehicle", cascade="all, delete")
 

@@ -197,77 +197,119 @@ async def get_item_visits(listing_id: str, headers: dict, client: httpx.AsyncCli
         return 0
 
 
+async def _resolve_brand_model_value_ids(client: httpx.AsyncClient, headers: dict, db: Session, vehicle: Vehicle) -> tuple[str | None, str | None]:
+    """Resolve o value_id numérico de BRAND/MODEL no catálogo do ML pra um
+    veículo — é isso (não o texto livre) que o ML exige pra achar produtos
+    reais e aceitar a compatibilidade (ver _resolve... abaixo pra contexto
+    completo do bug). Cacheado em Vehicle pra não repetir a busca a cada
+    peça do mesmo modelo."""
+    if vehicle.ml_brand_value_id and vehicle.ml_model_value_id:
+        return vehicle.ml_brand_value_id, vehicle.ml_model_value_id
+
+    r = await client.get(
+        f"{ML_API}/products/search",
+        params={"site_id": "MLB", "domain_id": "MLB-CARS_AND_VANS", "q": f"{vehicle.brand} {vehicle.model}"},
+        headers=headers, timeout=15,
+    )
+    if r.status_code != 200:
+        return None, None
+    results = r.json().get("results", [])
+    if not results:
+        return None, None
+    attrs = {a["id"]: a for a in results[0].get("attributes", [])}
+    brand_id = attrs.get("BRAND", {}).get("value_id")
+    model_id = attrs.get("MODEL", {}).get("value_id")
+    if brand_id and model_id:
+        vehicle.ml_brand_value_id = str(brand_id)
+        vehicle.ml_model_value_id = str(model_id)
+        db.commit()
+    return brand_id, model_id
+
+
 async def push_part_compatibility_to_ml(part_id: int, listing_id: str, db: Session, headers: dict, client: httpx.AsyncClient) -> dict:
     """Envia pro ML a compatibilidade de veículos que o Pitbox já tem no banco
     pra essa peça — sem isso o anúncio fica sem 'ficha técnica' e o ML marca
-    'Inativo para revisar / Não indica os veículos compatíveis' depois de uns
-    dias (visto em anúncios reais em 2026-07-20).
+    'Inativo para revisar / Não indica os veículos compatíveis' (tag
+    incomplete_compatibilities, confirmado em anúncios reais em 2026-07-22).
 
-    Formato correto descoberto na documentação oficial (a 1ª tentativa, com
-    {"compatibilities": [{"attributes": ...}]}, é da API antiga e o ML recusa
-    com "products, products_groups, products_families, universal ou item to
-    copy" ausentes): precisa do wrapper `products_families`, com `domain_id`
-    do domínio de veículos e `creation_source` (obrigatório desde a mudança
-    de política do ML)."""
+    LIÇÃO CARA — NUNCA REMOVER: BRAND/MODEL como texto livre (value_name)
+    SEMPRE falha com "No products were found for the given product
+    families", mesmo com domain_id/creation_source corretos. O ML só aceita
+    porque o `products_families` casa contra PRODUTOS REAIS do catálogo
+    (cada ano/versão/mercado de um modelo é um produto separado) — BRAND e
+    MODEL precisam do `value_id` numérico do catálogo (constante por
+    marca/modelo, ex: Ford=66432, Ka=68902), resolvido via
+    GET /products/search?domain_id=MLB-CARS_AND_VANS&q={marca} {modelo}.
+    Sem year_start, casa com TODOS os anos/versões do modelo — e se isso
+    passar de 200 produtos, o ML recusa com "Maximum of 200 products...
+    consider products families" (daí processar 1 ano por vez: nenhum
+    modelo real chega perto de 200 variações num único ano)."""
     compats = db.query(Compatibility).filter(Compatibility.part_id == part_id).all()
     if not compats:
         return {"skipped": "peça sem compatibilidade cadastrada no Pitbox"}
 
+    item_r = await client.get(f"{ML_API}/items/{listing_id}", headers=headers, timeout=15)
+    item = item_r.json() if item_r.status_code == 200 else {}
+    user_product_id = item.get("user_product_id")
+    category_id = item.get("category_id")
+
     families = []
+    pulados = []
     for c in compats:
         v = db.query(Vehicle).filter(Vehicle.id == c.vehicle_id).first()
         if not v:
             continue
-        attrs = [
-            {"id": "BRAND", "value_name": v.brand},
-            {"id": "MODEL", "value_name": v.model},
-        ]
-        if v.year_start:
-            years = str(v.year_start) if v.year_start == v.year_end or not v.year_end else f"{v.year_start}-{v.year_end}"
-            attrs.append({"id": "YEARS", "value_name": years})
-        if v.engine:
-            attrs.append({"id": "ENGINE_VERSION", "value_name": v.engine})
-        families.append({
-            "domain_id": "MLB-CARS_AND_VANS",
-            "creation_source": "DEFAULT",
-            "attributes": attrs,
-        })
+        brand_id, model_id = await _resolve_brand_model_value_ids(client, headers, db, v)
+        if not brand_id or not model_id:
+            pulados.append(f"{v.brand} {v.model} (não encontrado no catálogo ML)")
+            continue
+        y1 = v.year_start or 0
+        y2 = v.year_end or y1
+        anos = range(y1, y2 + 1) if y1 else [None]
+        for ano in anos:
+            attrs = [
+                {"id": "BRAND", "value_id": brand_id, "value_name": v.brand},
+                {"id": "MODEL", "value_id": model_id, "value_name": v.model},
+            ]
+            if ano:
+                attrs.append({"id": "VEHICLE_YEAR", "value_name": str(ano)})
+            families.append({"domain_id": "MLB-CARS_AND_VANS", "creation_source": "DEFAULT", "attributes": attrs})
 
     if not families:
-        return {"skipped": "nenhum veículo válido pra enviar"}
+        return {"skipped": "nenhum veículo resolvido no catálogo ML", "detalhe": pulados}
 
-    # Itens marcados "User Product" (tag user_product_listing) recusam o
-    # endpoint clássico /items/{id}/compatibilities com "has User Product
-    # compatibilities. Use the corresponding User Product resources." —
-    # precisam do endpoint /user-products/{up_id}/compatibilities, com
-    # domain_id/category_id fora da lista de products_families.
-    item_r = await client.get(f"{ML_API}/items/{listing_id}", headers=headers, timeout=15)
-    item = item_r.json() if item_r.status_code == 200 else {}
-    user_product_id = item.get("user_product_id")
+    endpoint = (
+        f"{ML_API}/user-products/{user_product_id}/compatibilities" if user_product_id
+        else f"{ML_API}/items/{listing_id}/compatibilities"
+    )
 
-    if user_product_id:
-        body = {
-            "domain_id": "MLB-CARS_AND_VANS",
-            "category_id": item.get("category_id"),
-            "products_families": families,
+    async def enviar(lote: list[dict]):
+        body = {"domain_id": "MLB-CARS_AND_VANS", "category_id": category_id, "products_families": lote}
+        return await client.post(endpoint, headers=headers, json=body, timeout=30)
+
+    # Tenta tudo de uma vez; se estourar o limite de 200 produtos (modelo
+    # com muitas versões/mercados), refaz 1 ano por vez — nenhum modelo real
+    # chega perto de 200 variações dentro de um único ano.
+    r = await enviar(families)
+    if r.status_code == 400 and "Maximum of 200 products" in r.text:
+        total_criadas = 0
+        erros = []
+        for familia in families:
+            r2 = await enviar([familia])
+            if r2.status_code in (200, 201):
+                total_criadas += r2.json().get("created_compatibilities_count", 0)
+            else:
+                erros.append({"familia": familia, "status": r2.status_code, "resposta": r2.text[:300]})
+        return {
+            "ok": total_criadas > 0, "modo": "por_ano", "created_compatibilities_count": total_criadas,
+            "erros": erros, "pulados": pulados, "user_product_id": user_product_id,
         }
-        r = await client.post(
-            f"{ML_API}/user-products/{user_product_id}/compatibilities",
-            headers=headers,
-            json=body,
-            timeout=20,
-        )
-    else:
-        r = await client.post(
-            f"{ML_API}/items/{listing_id}/compatibilities",
-            headers=headers,
-            json={"products_families": families},
-            timeout=20,
-        )
+
     return {
         "status_code": r.status_code,
         "ok": r.status_code in (200, 201),
         "sent": families,
+        "pulados": pulados,
         "user_product_id": user_product_id,
         "response": r.json() if r.headers.get("content-type", "").startswith("application/json") else r.text[:500],
     }
