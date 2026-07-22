@@ -7,8 +7,10 @@ candidato passar na validação (a esteira segue sem capa nesse caso, não
 trava o resto do fluxo por causa disso)."""
 
 import io
+import re
 import httpx
 from pathlib import Path
+from urllib.parse import urljoin
 from PIL import Image, ImageChops
 from sqlalchemy.orm import Session
 from app.config import settings
@@ -54,8 +56,11 @@ async def _find_vehicle_photo_candidates(client: httpx.AsyncClient, brand: str, 
         "Priorize, nessa ordem: material de imprensa oficial da montadora > catálogo/"
         "concessionária > portal especializado (Car and Driver, Motor1, Quatro Rodas) com "
         "foto de estúdio. "
-        "Responda SÓ com JSON no final da resposta, com as URLs DIRETAS do arquivo de "
-        'imagem (terminando em .jpg/.png/.webp): {"candidates": ["url1", "url2", "url3"]}'
+        "As URLs encontradas pela busca geralmente são da PÁGINA (artigo, galeria), não do "
+        "arquivo de imagem em si — isso é esperado, pode retornar a URL da página que "
+        "melhor descreve/contém essa foto, meu sistema extrai a imagem da página depois. "
+        "Responda SÓ com JSON no final da resposta: "
+        '{"candidates": ["url_da_pagina_1", "url_da_pagina_2", "url_da_pagina_3"]}'
     )}]
     resp = await _claude_call(client, messages, tools=tools, max_tokens=2048)
     text = "".join(b.get("text", "") for b in resp.get("content", []) if b.get("type") == "text")
@@ -67,6 +72,25 @@ async def _find_vehicle_photo_candidates(client: httpx.AsyncClient, brand: str, 
     except Exception as e:
         print(f"[capa] falha ao extrair candidatos pra {brand} {model}{ano_txt}: {e} | resposta: {text[:300]}")
         return []
+
+
+def _extrair_imagens_da_pagina(html: str, base_url: str) -> list[str]:
+    """web_search devolve URL da página (artigo/galeria), não do arquivo de
+    imagem — extrai candidatos direto do HTML: og:image (geralmente a foto
+    principal/hero do artigo) primeiro, depois <img src> em geral como
+    reserva."""
+    candidatos = []
+    og = re.findall(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', html, re.I)
+    candidatos.extend(og)
+    imgs = re.findall(r'<img[^>]+src=["\']([^"\']+\.(?:jpg|jpeg|png|webp)[^"\']*)["\']', html, re.I)
+    candidatos.extend(imgs)
+    vistos, resultado = set(), []
+    for c in candidatos:
+        url = urljoin(base_url, c)
+        if url not in vistos:
+            vistos.add(url)
+            resultado.append(url)
+    return resultado[:8]
 
 
 def _remover_fundo_carro(img: Image.Image) -> Image.Image | None:
@@ -144,7 +168,10 @@ async def montar_capa(
 
     if vehicle and vehicle.ref_photo_url:
         try:
-            r = await client.get(vehicle.ref_photo_url, timeout=20, follow_redirects=True)
+            r = await client.get(
+                vehicle.ref_photo_url, timeout=20, follow_redirects=True,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; PitboxBot/1.0)"},
+            )
             if r.status_code == 200:
                 car_crop = _remover_fundo_carro(Image.open(io.BytesIO(r.content)).convert("RGB"))
                 if car_crop is not None:
@@ -153,10 +180,31 @@ async def montar_capa(
             car_crop = None
 
     if car_crop is None:
-        candidates = await _find_vehicle_photo_candidates(client, brand, model, year_start)
-        for url in candidates:
+        pages = await _find_vehicle_photo_candidates(client, brand, model, year_start)
+        # Expande cada página (artigo/galeria) nas imagens reais que ela
+        # contém — web_search só devolve a URL da página, não do arquivo.
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; PitboxBot/1.0)"}
+        image_urls: list[str] = []
+        for page_url in pages:
             try:
-                r = await client.get(url, timeout=20, follow_redirects=True)
+                r = await client.get(page_url, timeout=15, follow_redirects=True, headers=headers)
+                ctype = r.headers.get("content-type", "")
+                if r.status_code != 200:
+                    print(f"[capa] pagina descartada {page_url}: status={r.status_code}")
+                    continue
+                if ctype.startswith("image"):
+                    image_urls.append(page_url)
+                elif "html" in ctype:
+                    extraidas = _extrair_imagens_da_pagina(r.text, str(r.url))
+                    print(f"[capa] {page_url} -> {len(extraidas)} imagem(ns) extraida(s)")
+                    image_urls.extend(extraidas)
+            except Exception as e:
+                print(f"[capa] erro ao abrir pagina {page_url}: {e}")
+                continue
+
+        for url in image_urls:
+            try:
+                r = await client.get(url, timeout=20, follow_redirects=True, headers=headers)
                 ctype = r.headers.get("content-type", "")
                 if r.status_code != 200 or not ctype.startswith("image"):
                     print(f"[capa] descartado {url}: status={r.status_code} content-type={ctype}")
