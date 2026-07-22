@@ -137,6 +137,53 @@ async def rebuild_photos(
     return {"part_id": part_id, "photos": part.photos, "capa": capa_url, "listings_atualizados": resultados}
 
 
+class SetPhotos(BaseModel):
+    photos: list[str]
+
+
+@router.post("/parts/{part_id}/set-photos", dependencies=[Depends(require_service_key)])
+async def set_photos(part_id: int, data: SetPhotos, db: Session = Depends(get_db)):
+    """Sobrescreve part.photos com uma lista exata e empurra pros anúncios ML
+    ativos — usado pra corrigir/reverter rápido quando uma foto (ex: capa)
+    sai errada num anúncio já publicado, sem depender de reprocessar tudo de
+    novo."""
+    import httpx
+    from app.services.platform_registry import resolve_account_for_listing
+
+    part = db.query(Part).filter(Part.id == part_id).first()
+    if not part:
+        raise HTTPException(404, "Peça não encontrada")
+
+    part.photos = data.photos
+    _log(part, "set_photos_manual", {"fotos": len(data.photos)})
+    db.commit()
+
+    listings = db.query(MarketplaceListing).filter(
+        MarketplaceListing.part_id == part_id,
+        MarketplaceListing.marketplace == "mercadolivre",
+        MarketplaceListing.status == "active",
+    ).all()
+
+    resultados = []
+    pictures = [{"source": url} for url in data.photos[:12]]
+    async with httpx.AsyncClient(timeout=30) as client:
+        for listing in listings:
+            account = await resolve_account_for_listing(listing, db)
+            if not account or not account.get("access_token"):
+                resultados.append({"listing_id": listing.listing_id, "erro": "conta não resolvida"})
+                continue
+            headers = {"Authorization": f"Bearer {account['access_token']}", "Content-Type": "application/json"}
+            r = await client.put(
+                f"https://api.mercadolibre.com/items/{listing.listing_id}",
+                headers=headers, json={"pictures": pictures},
+            )
+            resultados.append({"listing_id": listing.listing_id, "status_code": r.status_code, "ok": r.status_code == 200})
+    _log(part, "set_photos_push_ml", resultados)
+    db.commit()
+
+    return {"part_id": part_id, "photos": part.photos, "listings_atualizados": resultados}
+
+
 @router.get("/ml-token", dependencies=[Depends(require_service_key)])
 async def get_ml_token(db: Session = Depends(get_db)):
     """Token ML sempre fresco (renova via refresh_token se preciso) — usado pela
