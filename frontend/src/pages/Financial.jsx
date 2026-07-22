@@ -22,14 +22,16 @@ export default function Financial() {
   const [partSearch, setPartSearch] = useState('')
   const qc = useQueryClient()
 
-  const { data: fin } = useQuery({
+  const { data: fin, isError: finError, isFetching: finFetching } = useQuery({
     queryKey: ['financial', month, year],
     queryFn: () => getMonthlyFinancial({ month, year }),
+    retry: 3,
   })
 
-  const { data: daily } = useQuery({
+  const { data: daily, isError: dailyError } = useQuery({
     queryKey: ['financial-daily', month, year],
     queryFn: () => getDailyFinancial({ month, year }),
+    retry: 3,
   })
 
   const { data: partsData } = useQuery({
@@ -74,6 +76,13 @@ export default function Financial() {
         <input type="number" value={year} onChange={e => setYear(Number(e.target.value))} min="2024" max="2030"
           className="w-20 border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500" />
       </div>
+
+      {(finError || dailyError) && (
+        <div className="mb-4 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-4 py-3">
+          Não consegui carregar os dados financeiros agora (o servidor pode estar reiniciando após uma atualização).
+          Os valores abaixo podem estar incompletos — {finFetching ? 'tentando de novo automaticamente...' : 'recarregue a página em alguns segundos.'}
+        </div>
+      )}
 
       {/* Cards de totais globais */}
       <div className="grid grid-cols-3 gap-4 mb-6">

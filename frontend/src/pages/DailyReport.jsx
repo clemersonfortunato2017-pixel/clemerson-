@@ -98,9 +98,10 @@ function ReadyToPublish() {
 export default function DailyReport() {
   const [date, setDate] = useState(todayStr())
   const [showUpload, setShowUpload] = useState(false)
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError } = useQuery({
     queryKey: ['daily-report', date],
     queryFn: () => getDailyReport(date),
+    retry: 3,
   })
 
   return (
@@ -130,6 +131,11 @@ export default function DailyReport() {
       </div>
 
       {isLoading && <p className="text-gray-400 text-sm">Carregando...</p>}
+      {isError && (
+        <p className="text-red-600 text-sm bg-red-50 border border-red-200 rounded-lg px-4 py-3">
+          Não consegui carregar o relatório agora (o servidor pode estar reiniciando). Recarregue a página em alguns segundos.
+        </p>
+      )}
 
       {data && (
         <>
