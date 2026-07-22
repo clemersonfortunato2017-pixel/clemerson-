@@ -61,8 +61,11 @@ async def _find_vehicle_photo_candidates(client: httpx.AsyncClient, brand: str, 
     text = "".join(b.get("text", "") for b in resp.get("content", []) if b.get("type") == "text")
     try:
         data = _extract_json(text)
-        return data.get("candidates", [])[:3]
-    except Exception:
+        candidates = data.get("candidates", [])[:3]
+        print(f"[capa] candidatos pra {brand} {model}{ano_txt}: {candidates}")
+        return candidates
+    except Exception as e:
+        print(f"[capa] falha ao extrair candidatos pra {brand} {model}{ano_txt}: {e} | resposta: {text[:300]}")
         return []
 
 
@@ -154,16 +157,23 @@ async def montar_capa(
         for url in candidates:
             try:
                 r = await client.get(url, timeout=20, follow_redirects=True)
-                if r.status_code != 200 or not r.headers.get("content-type", "").startswith("image"):
+                ctype = r.headers.get("content-type", "")
+                if r.status_code != 200 or not ctype.startswith("image"):
+                    print(f"[capa] descartado {url}: status={r.status_code} content-type={ctype}")
                     continue
                 img = Image.open(io.BytesIO(r.content)).convert("RGB")
                 if img.width < 500:
+                    print(f"[capa] descartado {url}: largura={img.width}px (min 500)")
                     continue
                 car_crop = _remover_fundo_carro(img)
-                if car_crop is not None:
-                    fonte_usada = url
-                    break
-            except Exception:
+                if car_crop is None:
+                    print(f"[capa] descartado {url}: remocao de fundo falhou ou area fora da faixa aceitavel")
+                    continue
+                fonte_usada = url
+                print(f"[capa] usando {url}")
+                break
+            except Exception as e:
+                print(f"[capa] erro ao baixar/processar {url}: {e}")
                 continue
 
     if car_crop is None:

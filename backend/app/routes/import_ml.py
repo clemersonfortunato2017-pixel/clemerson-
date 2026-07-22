@@ -229,6 +229,20 @@ async def ml_get_proxy(path: str, db: Session = Depends(get_db)):
     return {"status_code": r.status_code, "body": r.json() if r.headers.get("content-type", "").startswith("application/json") else r.text[:2000]}
 
 
+@router.post("/test-capa/{part_id}")
+async def test_capa(part_id: int, brand: str, model: str, year: int | None = None, db: Session = Depends(get_db)):
+    """Debug — testa só a geração da foto de capa (Passo 1B) pra uma peça já
+    identificada, sem rodar identificação/preço de novo. Remover depois que
+    a busca de foto de veículo estiver validada em produção."""
+    from app.services.vehicle_photo import montar_capa
+    part = db.query(Part).filter(Part.id == part_id).first()
+    if not part:
+        raise HTTPException(404, "peça não encontrada")
+    async with httpx.AsyncClient() as client:
+        capa_url = await montar_capa(client, db, part_id, brand, model, year, part.photos[0])
+    return {"capa_url": capa_url}
+
+
 @router.post("/ml-proxy-post")
 async def ml_post_proxy(path: str, body: dict, db: Session = Depends(get_db)):
     """Mesma ideia do ml-proxy (GET), mas pra endpoints POST que são só
