@@ -339,6 +339,14 @@ async def mark_published(part_id: int, data: PublishResult, db: Session = Depend
     _log(part, "publicado", {"listing_id": data.listing_id, "url": data.url, "price": data.price})
     db.commit()
 
+    if data.marketplace == "mercadolivre":
+        from app.services.platform_registry import _ml_legacy_account, push_ml_compatibility
+        legacy = await _ml_legacy_account(db)
+        if legacy:
+            compat = await push_ml_compatibility(part.id, data.listing_id, legacy, db)
+            _log(part, "compatibilidade", compat)
+            db.commit()
+
     from app.services.platform_registry import publish_to_all_accounts
     fanout = await publish_to_all_accounts(part.id, db)
     _log(part, "fanout_multiconta", fanout)

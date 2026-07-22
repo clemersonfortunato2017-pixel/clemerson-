@@ -487,6 +487,24 @@ async def get_platforms_status(db: Session) -> list[dict]:
     return result
 
 
+async def push_ml_compatibility(part_id: int, listing_id: str, account: dict, db: Session) -> dict:
+    """Empurra a compatibilidade de veículos (já cadastrada em Compatibility)
+    pro anúncio ML recém-criado — sem isso o anúncio nasce com a tag
+    incomplete_compatibilities e o ML marca 'Inativo para revisar' depois
+    de uns dias. Até 2026-07-22 isso só rodava manualmente via
+    /import/push-compatibility; agora roda sozinho assim que o anúncio é
+    publicado, pra nenhum anúncio novo nascer incompleto. Nunca derruba a
+    publicação em si se falhar (loga e segue — a peça já está no ar,
+    melhor publicada sem compatibilidade do que não publicada)."""
+    try:
+        headers = {"Authorization": f"Bearer {account['access_token']}", "Content-Type": "application/json"}
+        async with httpx.AsyncClient(timeout=30) as client:
+            from app.services.ml_importer import push_part_compatibility_to_ml
+            return await push_part_compatibility_to_ml(part_id, listing_id, db, headers, client)
+    except Exception as e:
+        return {"error": str(e)}
+
+
 async def publish_to_all_accounts(part_id: int, db: Session) -> dict:
     """Publica a peça em TODAS as contas ativas (todas as plataformas, todas
     as contas dentro de cada plataforma) onde ela ainda não está listada.
@@ -539,6 +557,8 @@ async def publish_to_all_accounts(part_id: int, db: Session) -> dict:
                     platform_account_id=account["account_id"],
                 )
                 db.add(listing)
+                if platform_name == "mercadolivre":
+                    await push_ml_compatibility(part.id, r["listing_id"], account, db)
                 results[account["label"]] = {"status": "published", "listing_id": r["listing_id"]}
             else:
                 results[account["label"]] = {"status": "error", "detail": r.get("error")}

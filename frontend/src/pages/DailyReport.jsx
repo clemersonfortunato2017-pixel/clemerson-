@@ -50,6 +50,9 @@ function ReadyToPublish() {
           <div className="space-y-2">
             {readyItems.map((p) => (
               <div key={p.id} className="flex items-center justify-between bg-white rounded-lg px-3 py-2 border border-green-100">
+                {p.photos?.[0] && (
+                  <img src={p.photos[0]} alt="" className="w-12 h-12 rounded-md object-cover border border-gray-200 mr-3 shrink-0" />
+                )}
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-gray-800 truncate">{p.title}</p>
                   <p className="text-xs text-gray-500">{(p.sale_price || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
@@ -76,9 +79,14 @@ function ReadyToPublish() {
               {reviewItems.length} peça(s) precisam de revisão manual
             </h2>
           </div>
-          <div className="space-y-1">
+          <div className="space-y-2">
             {reviewItems.map((p) => (
-              <p key={p.id} className="text-sm text-amber-900">{p.title || `Peça #${p.id}`}</p>
+              <div key={p.id} className="flex items-center bg-white rounded-lg px-3 py-2 border border-amber-100">
+                {p.photos?.[0] && (
+                  <img src={p.photos[0]} alt="" className="w-10 h-10 rounded-md object-cover border border-gray-200 mr-3 shrink-0" />
+                )}
+                <p className="text-sm text-amber-900 truncate">{p.title || `Peça #${p.id}`}</p>
+              </div>
             ))}
           </div>
         </div>

@@ -6,7 +6,7 @@ from app.database import get_db
 from app.models.part import Part, MarketplaceListing, StockMovement, Compatibility
 from app.services.platform_registry import (
     close_on_all_accounts, publish_to_all_accounts, get_platforms_status,
-    _ml_legacy_account, _fetch_ml_item_detail, MercadoLivrePlatform,
+    _ml_legacy_account, _fetch_ml_item_detail, MercadoLivrePlatform, push_ml_compatibility,
 )
 from app.services.cross_platform_sync import retry_listing_sync
 from app.routes.auth import get_current_user
@@ -76,9 +76,10 @@ async def publish_with_reference(part_id: int, data: PublishWithReference, db: S
     )
     db.add(listing)
     db.commit()
+    compat_result = await push_ml_compatibility(part_id, result["listing_id"], account, db)
 
     fanout = await publish_to_all_accounts(part_id, db)
-    return {"primary": result, "fanout": fanout}
+    return {"primary": result, "compatibilidade": compat_result, "fanout": fanout}
 
 
 @router.post("/parts/{part_id}/publish-ready")
@@ -123,9 +124,10 @@ async def publish_ready(part_id: int, db: Session = Depends(get_db)):
     db.add(listing)
     part.status = "published"
     db.commit()
+    compat_result = await push_ml_compatibility(part_id, result["listing_id"], account, db)
 
     fanout = await publish_to_all_accounts(part_id, db)
-    return {"primary": result, "fanout": fanout}
+    return {"primary": result, "compatibilidade": compat_result, "fanout": fanout}
 
 
 @router.get("/status")
