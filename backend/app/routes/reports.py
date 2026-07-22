@@ -11,7 +11,8 @@ from typing import Optional
 from app.database import get_db
 from app.models.part import Part, MarketplaceListing
 from app.models.sale import Sale, SaleItem
-from app.services.ml_importer import get_valid_access_token, get_item_visits
+from app.services.ml_importer import get_item_visits
+from app.services.platform_registry import resolve_account_for_listing
 from app.routes.auth import get_current_user
 
 router = APIRouter(prefix="/reports", tags=["reports"], dependencies=[Depends(get_current_user)])
@@ -102,22 +103,32 @@ async def anuncios_status(db: Session = Depends(get_db)):
     all_margins = [m for ms in margin_by_part.values() for m in ms]
     avg_margin = (sum(all_margins) / len(all_margins)) if all_margins else 0
 
-    user_id, token = await get_valid_access_token(db)
-    headers = {"Authorization": f"Bearer {token}"}
+    # Resolve a conta certa por anúncio ANTES de buscar visita — anúncio da
+    # conta PF só pode ser consultado com o token da PF, não o da PJ
+    # (legada). Sem isso, visita de anúncio PF sempre voltaria 0/erro.
+    accounts_by_listing: dict[int, Optional[dict]] = {}
+    for listing in listings:
+        accounts_by_listing[listing.id] = await resolve_account_for_listing(listing, db)
+
     sem = asyncio.Semaphore(5)
 
-    async def visits_for(listing_id: str) -> int:
+    async def visits_for(listing: MarketplaceListing) -> int:
+        account = accounts_by_listing.get(listing.id)
+        if not account or not account.get("access_token"):
+            return 0
+        headers = {"Authorization": f"Bearer {account['access_token']}"}
         async with sem:
             async with httpx.AsyncClient() as client:
-                return await get_item_visits(listing_id, headers, client)
+                return await get_item_visits(listing.listing_id, headers, client)
 
-    visit_counts = await asyncio.gather(*(visits_for(l.listing_id) for l in listings))
+    visit_counts = await asyncio.gather(*(visits_for(l) for l in listings))
 
     buckets = {"parado_visibilidade": [], "parado_conversao": [], "estrela": [], "saudavel": []}
     for listing, visits in zip(listings, visit_counts):
         part = db.query(Part).filter(Part.id == listing.part_id).first()
         if not part:
             continue
+        account = accounts_by_listing.get(listing.id)
         last_sale = (
             db.query(func.max(Sale.sold_at))
             .join(SaleItem, SaleItem.sale_id == Sale.id)
@@ -128,6 +139,7 @@ async def anuncios_status(db: Session = Depends(get_db)):
         entry = {
             "part_id": part.id, "title": part.title, "listing_id": listing.listing_id,
             "url": listing.url, "visits_total": visits,
+            "conta": account["label"] if account else "desconhecida",
             "last_sale_at": last_sale.isoformat() if last_sale else None,
         }
         if not vendeu_recente:
