@@ -217,12 +217,21 @@ def disk_cleanup():
 
 
 @router.get("/ml-proxy")
-async def ml_get_proxy(path: str, db: Session = Depends(get_db)):
+async def ml_get_proxy(path: str, account_id: int | None = None, db: Session = Depends(get_db)):
     """Proxy só-leitura pra explorar endpoints GET da API do ML usando o token
     que o backend já gerencia — usado só durante o desenvolvimento da feature
     de compatibilidade (descobrir domain_id/attribute value_id), nunca expõe
-    o token em si pro chamador."""
-    user_id, token = await get_valid_access_token(db)
+    o token em si pro chamador. `account_id` opcional pra usar uma conta
+    extra (ex: ML pessoa física) em vez da legada."""
+    if account_id:
+        from app.services.platform_registry import get_accounts_for_platform
+        accounts = await get_accounts_for_platform("mercadolivre", db)
+        account = next((a for a in accounts if a.get("account_id") == account_id), None)
+        if not account:
+            raise HTTPException(404, "conta não encontrada")
+        token = account["access_token"]
+    else:
+        user_id, token = await get_valid_access_token(db)
     headers = {"Authorization": f"Bearer {token}"}
     async with httpx.AsyncClient(timeout=20) as client:
         r = await client.get(f"https://api.mercadolibre.com/{path.lstrip('/')}", headers=headers)
