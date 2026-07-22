@@ -55,6 +55,10 @@ class Vehicle(Base):
     year_end = Column(Integer)
     engine = Column(String(50))
     version = Column(String(100))
+    # Cache da foto de estúdio (0km) usada na capa dos anúncios — evita
+    # pesquisar de novo pra cada peça nova do mesmo modelo (Passo 1B do
+    # skill anuncio-ml-autopecas).
+    ref_photo_url = Column(String(500))
 
     compatibilities = relationship("Compatibility", back_populates="vehicle", cascade="all, delete")
 

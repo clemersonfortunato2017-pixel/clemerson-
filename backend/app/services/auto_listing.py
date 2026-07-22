@@ -167,6 +167,26 @@ async def prepare_part(part_id: int, db: Session) -> dict:
             price_info = {"suggested_price": None, "source_note": f"erro: {e}"}
         _log_step(part, "concorrentes", price_info)
 
+        # Foto de capa (veículo 0km + peça, 50/50) — Passo 1B do skill
+        # anuncio-ml-autopecas, OBRIGATÓRIO em todo anúncio mas ainda não
+        # portado pra esteira automática até 2026-07-21. Nunca trava o resto
+        # do fluxo se não achar uma foto de veículo válida.
+        tem_capa = "/otimizadas/00_capa.jpg" in (part.photos[0] if part.photos else "")
+        if ident.get("brand") and ident.get("model") and part.photos and not tem_capa:
+            from app.services.vehicle_photo import montar_capa
+            try:
+                capa_url = await montar_capa(
+                    client, db, part.id, ident["brand"], ident["model"],
+                    ident.get("year_start"), part.photos[0],
+                )
+                if capa_url:
+                    part.photos = [capa_url] + list(part.photos)
+                    _log_step(part, "capa_veiculo", {"foto": capa_url})
+                else:
+                    _log_step(part, "capa_veiculo", "nenhuma foto de veiculo valida encontrada — seguiu sem capa")
+            except Exception as e:
+                _log_step(part, "capa_veiculo", f"erro: {e}")
+
     reference = find_catalog_reference(db, ident.get("part_type", ""), ident.get("brand", ""))
     _log_step(part, "referencia", reference or "nenhuma encontrada — precisa de decisão manual de categoria")
 

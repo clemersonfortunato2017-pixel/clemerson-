@@ -206,13 +206,17 @@ class MercadoLivrePlatform(PlatformBase):
             return {"error": "ML não conectado"}
 
         if reference:
-            # Reaproveita category/attributes/pictures de um anúncio já ativo
-            # da mesma peça — sem isso o ML recusa por faltar atributo
-            # obrigatório da categoria (ex: BRAND, PART_NUMBER), que não dá
-            # pra reconstruir genericamente sem saber a categoria de antemão.
-            pictures = [{"id": p["id"]} for p in reference.get("pictures", []) if p.get("id")][:12]
+            # Reaproveita category/attributes da referência — sem isso o ML
+            # recusa por faltar atributo obrigatório da categoria (ex: BRAND,
+            # PART_NUMBER), que não dá pra reconstruir genericamente sem saber
+            # a categoria de antemão. FOTOS não: cada peça é uma unidade
+            # física usada diferente (não catálogo de peça nova idêntica) —
+            # sempre usar as fotos reais desta peça (inclui a capa
+            # veículo+peça, Passo 1B do skill), só cai pras fotos da
+            # referência se esta peça não tiver nenhuma foto própria ainda.
+            pictures = [{"source": url} for url in (part.photos or [])[:12]]
             if not pictures:
-                pictures = [{"source": url} for url in (part.photos or [])[:12]]
+                pictures = [{"id": p["id"]} for p in reference.get("pictures", []) if p.get("id")][:12]
             NON_COPYABLE_ATTRS = {"ITEM_CONDITION", "CATALOG_TITLE", "HAS_COMPATIBILITIES"}
             attributes = [
                 {"id": a["id"], **({"value_id": a["value_id"]} if a.get("value_id") else {}),

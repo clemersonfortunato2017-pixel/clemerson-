@@ -25,6 +25,7 @@ def _migrate_new_columns():
     stmts = [
         "ALTER TABLE marketplace_listings ADD COLUMN platform_account_id INTEGER",
         "ALTER TABLE marketplace_listings ADD COLUMN sync_failed BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE vehicles ADD COLUMN ref_photo_url VARCHAR(500)",
     ]
     with engine.connect() as conn:
         for stmt in stmts:
