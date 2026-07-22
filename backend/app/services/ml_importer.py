@@ -312,8 +312,11 @@ async def push_part_compatibility_to_ml(part_id: int, listing_id: str, db: Sessi
         else:
             erros.append({"lote": lote, "status": r.status_code, "resposta": r.text[:300]})
 
+    # ok = nenhum lote falhou — created_compatibilities_count=0 sem erro
+    # significa que a compatibilidade já existia (rodar de novo é
+    # idempotente), não que falhou.
     return {
-        "ok": total_criadas > 0 or (not erros and not families),
+        "ok": not erros,
         "created_compatibilities_count": total_criadas,
         "erros": erros,
         "pulados": pulados,
