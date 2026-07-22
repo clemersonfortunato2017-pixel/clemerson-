@@ -295,7 +295,12 @@ async def _run_backfill_descricoes(limit: int):
                 break
         backfill_state["total"] = len(part_ids)
 
-        sem = asyncio.Semaphore(4)
+        # Concorrência baixa de propósito: cada tarefa segura sua própria
+        # conexão de banco (pool) durante toda a chamada de rede lenta
+        # (Claude + ML) — com semáforo alto o pool esgota rápido (visto na
+        # prática: "QueuePool limit of size 5 overflow 10 reached" com
+        # semáforo 4, todas as 25 tarefas do lote falharam de uma vez).
+        sem = asyncio.Semaphore(2)
 
         async def processa(part_id: int):
             # Sessão própria por tarefa — SQLAlchemy Session não é seguro pra
