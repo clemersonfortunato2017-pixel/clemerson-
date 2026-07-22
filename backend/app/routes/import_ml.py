@@ -159,6 +159,38 @@ def prepare_pending_status():
     return prepare_state
 
 
+@router.get("/disk-usage")
+def disk_usage():
+    """Diagnóstico rápido — descobrir o que está enchendo o volume do
+    Railway (visto hoje 2026-07-21: upload falhou com 'No space left on
+    device')."""
+    import shutil
+    from pathlib import Path
+    from app.config import settings
+
+    total, used, free = shutil.disk_usage(settings.uploads_dir)
+    base = Path(settings.uploads_dir)
+    tamanhos = []
+    if base.exists():
+        for item in base.iterdir():
+            try:
+                if item.is_dir():
+                    size = sum(f.stat().st_size for f in item.rglob("*") if f.is_file())
+                else:
+                    size = item.stat().st_size
+                tamanhos.append({"nome": item.name, "mb": round(size / 1024 / 1024, 1)})
+            except Exception:
+                continue
+    tamanhos.sort(key=lambda x: -x["mb"])
+    return {
+        "total_gb": round(total / 1024**3, 2),
+        "usado_gb": round(used / 1024**3, 2),
+        "livre_gb": round(free / 1024**3, 2),
+        "maiores_itens": tamanhos[:20],
+        "total_itens_na_raiz": len(tamanhos),
+    }
+
+
 @router.get("/ml-proxy")
 async def ml_get_proxy(path: str, db: Session = Depends(get_db)):
     """Proxy só-leitura pra explorar endpoints GET da API do ML usando o token
