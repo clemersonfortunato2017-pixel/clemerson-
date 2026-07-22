@@ -191,6 +191,31 @@ def disk_usage():
     }
 
 
+@router.post("/disk-cleanup")
+def disk_cleanup():
+    """Libera espaço no volume — apaga o cache do modelo rembg (.u2net,
+    ~342MB) que virou peso morto desde que o Photoroom passou a ser o motor
+    principal de remoção de fundo (rembg só roda como reserva se o Photoroom
+    falhar; nesse caso o modelo é baixado nessa hora, sem problema). Visto
+    em 2026-07-21: volume de só 420MB total, quase todo ocupado por esse
+    cache, causando 'No space left on device' no upload de foto."""
+    import shutil
+    from pathlib import Path
+    from app.config import settings
+
+    cache_dir = Path(settings.uploads_dir) / ".u2net"
+    freed_mb = 0.0
+    if cache_dir.exists():
+        freed_mb = round(sum(f.stat().st_size for f in cache_dir.rglob("*") if f.is_file()) / 1024 / 1024, 1)
+        shutil.rmtree(cache_dir)
+
+    total, used, free = shutil.disk_usage(settings.uploads_dir)
+    return {
+        "liberado_mb": freed_mb,
+        "livre_gb_agora": round(free / 1024**3, 2),
+    }
+
+
 @router.get("/ml-proxy")
 async def ml_get_proxy(path: str, db: Session = Depends(get_db)):
     """Proxy só-leitura pra explorar endpoints GET da API do ML usando o token
