@@ -183,6 +183,20 @@ async def sync_part_compatibility(part_id: int, listing_id: str, db: Session, he
     return added
 
 
+async def get_item_visits(listing_id: str, headers: dict, client: httpx.AsyncClient) -> int:
+    """Total de visitas do anúncio (endpoint só aceita 1 id por chamada —
+    testado em 2026-07-21, `ids=A,B` dá erro 'maximum amount of items to
+    query is 1'). Visitas atualizam com até 48h de atraso, isso é esperado."""
+    try:
+        r = await client.get(f"{ML_API}/visits/items", params={"ids": listing_id}, headers=headers, timeout=15)
+        if r.status_code != 200:
+            return 0
+        data = r.json()
+        return data.get(listing_id, 0) or 0
+    except Exception:
+        return 0
+
+
 async def push_part_compatibility_to_ml(part_id: int, listing_id: str, db: Session, headers: dict, client: httpx.AsyncClient) -> dict:
     """Envia pro ML a compatibilidade de veículos que o Pitbox já tem no banco
     pra essa peça — sem isso o anúncio fica sem 'ficha técnica' e o ML marca
