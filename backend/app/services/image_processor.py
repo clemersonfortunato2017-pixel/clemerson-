@@ -44,6 +44,7 @@ def _remover_fundo_photoroom(img: Image.Image) -> Image.Image | None:
     peça reflexiva/escura, segundo teste do usuário) — None se a chave não
     estiver configurada ou a chamada falhar, pra sempre cair no fallback."""
     if not settings.photoroom_api_key:
+        print("[foto] PHOTOROOM_API_KEY ausente, usando rembg")
         return None
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=95)
@@ -56,9 +57,12 @@ def _remover_fundo_photoroom(img: Image.Image) -> Image.Image | None:
             timeout=30,
         )
         if r.status_code != 200:
+            print(f"[foto] Photoroom falhou status={r.status_code} body={r.text[:200]} — usando rembg")
             return None
+        print("[foto] Photoroom OK")
         return Image.open(io.BytesIO(r.content)).convert("RGBA")
-    except Exception:
+    except Exception as e:
+        print(f"[foto] Photoroom exception={e} — usando rembg")
         return None
 
 
