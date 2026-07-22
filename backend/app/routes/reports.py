@@ -8,14 +8,17 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import Optional
-from app.database import get_db
+from app.database import get_db, SessionLocal
 from app.models.part import Part, MarketplaceListing
 from app.models.sale import Sale, SaleItem
 from app.services.ml_importer import get_item_visits, fetch_all_item_ids
-from app.services.platform_registry import get_accounts_for_platform
+from app.services.platform_registry import get_accounts_for_platform, resolve_account_for_listing
 from app.routes.auth import get_current_user
+from fastapi import BackgroundTasks
 
 router = APIRouter(prefix="/reports", tags=["reports"], dependencies=[Depends(get_current_user)])
+
+desc_audit_state = {"running": False, "processed": 0, "total": 0, "ja_tinha": 0, "corrigido": 0, "sem_descricao_local": [], "erro": [], "done": True}
 
 
 @router.get("/daily")
@@ -182,3 +185,82 @@ async def anuncios_status(db: Session = Depends(get_db)):
         "desatualizados": desatualizados,
         "media_conta": {"qtd_media_30d": round(avg_qty, 2), "margem_media_30d_pct": round(avg_margin, 2)},
     }
+
+
+async def _run_audit_descricoes():
+    """Regra sem exceção (Clemerson, 2026-07-22): nenhum anúncio pode ficar
+    no ar sem descrição. Varre TODOS os anúncios ML ativos, confirma via
+    GET /items/{id}/description se cada um realmente tem texto — se não
+    tiver mas a peça já tem part.description salvo localmente, empurra e
+    confirma na hora; se a peça também não tem descrição local nenhuma
+    (não passou pela identificação automática, ex: publicada manualmente
+    fora da esteira), só reporta — não dá pra inventar uma descrição sem
+    rodar a identificação de novo."""
+    desc_audit_state.update({"running": True, "processed": 0, "total": 0, "ja_tinha": 0, "corrigido": 0,
+                             "sem_descricao_local": [], "erro": [], "done": False})
+    db = SessionLocal()
+    try:
+        listings = db.query(MarketplaceListing).filter(
+            MarketplaceListing.marketplace == "mercadolivre",
+            MarketplaceListing.status == "active",
+        ).all()
+        desc_audit_state["total"] = len(listings)
+        sem = asyncio.Semaphore(6)
+
+        async def processa(listing: MarketplaceListing):
+            async with sem:
+                account = await resolve_account_for_listing(listing, db)
+                if not account or not account.get("access_token"):
+                    desc_audit_state["erro"].append({"listing_id": listing.listing_id, "motivo": "conta não resolvida"})
+                    return
+                headers = {"Authorization": f"Bearer {account['access_token']}", "Content-Type": "application/json"}
+                async with httpx.AsyncClient(timeout=20) as client:
+                    try:
+                        r = await client.get(f"https://api.mercadolibre.com/items/{listing.listing_id}/description", headers=headers)
+                        tem_desc = r.status_code == 200 and bool((r.json() or {}).get("plain_text", "").strip())
+                        if tem_desc:
+                            desc_audit_state["ja_tinha"] += 1
+                            return
+                        part = db.query(Part).filter(Part.id == listing.part_id).first()
+                        desc_text = (part.description or part.notes or "").strip() if part else ""
+                        if not desc_text:
+                            desc_audit_state["sem_descricao_local"].append({
+                                "part_id": listing.part_id, "listing_id": listing.listing_id,
+                                "title": part.title if part else None,
+                            })
+                            return
+                        await client.post(
+                            f"https://api.mercadolibre.com/items/{listing.listing_id}/description",
+                            json={"plain_text": desc_text[:50000]}, headers=headers,
+                        )
+                        check = await client.get(f"https://api.mercadolibre.com/items/{listing.listing_id}/description", headers=headers)
+                        if check.status_code == 200 and (check.json() or {}).get("plain_text", "").strip():
+                            desc_audit_state["corrigido"] += 1
+                        else:
+                            desc_audit_state["erro"].append({"listing_id": listing.listing_id, "motivo": "push falhou na confirmação"})
+                    except Exception as e:
+                        desc_audit_state["erro"].append({"listing_id": listing.listing_id, "motivo": str(e)})
+                    finally:
+                        desc_audit_state["processed"] += 1
+
+        await asyncio.gather(*(processa(l) for l in listings))
+    finally:
+        desc_audit_state.update({"running": False, "done": True})
+        db.close()
+
+
+@router.post("/audit-descricoes")
+def audit_descricoes_start(background_tasks: BackgroundTasks):
+    """Inicia a varredura de TODOS os anúncios ML ativos: confirma descrição
+    de verdade (GET), corrige na hora se a peça já tem descrição local, e
+    reporta quais não têm nenhuma descrição salva em lugar nenhum (essas
+    precisam rodar a identificação de novo pra gerar uma)."""
+    if desc_audit_state["running"]:
+        return {"status": "already_running", **desc_audit_state}
+    background_tasks.add_task(_run_audit_descricoes)
+    return {"status": "started"}
+
+
+@router.get("/audit-descricoes/status")
+def audit_descricoes_status():
+    return desc_audit_state
