@@ -68,6 +68,75 @@ def reprocess_stuck_part(part_id: int, db: Session = Depends(get_db)):
     return {"id": part.id, "status": part.status, "photos": part.photos}
 
 
+@router.post("/parts/{part_id}/rebuild-photos", dependencies=[Depends(require_service_key)])
+async def rebuild_photos(
+    part_id: int, brand: str, model: str, year: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    """Reprocessa as fotos originais de uma peça já publicada (mesmo pipeline
+    de otimização/remoção de fundo de hoje, já com a correção do bug do
+    bbox — ver image_processor.py) e monta a foto de capa (veículo + peça,
+    Passo 1B do skill). Depois empurra as fotos novas pros anúncios ML já
+    ativos dessa peça (PUT /items/{id} com pictures por URL — o ML busca a
+    imagem sozinho, não precisa pré-upload). Usado pra corrigir peças
+    publicadas antes da correção do bug de remoção de fundo (2026-07-21),
+    sem precisar tirar fotos novas nem republicar do zero."""
+    import httpx
+    from pathlib import Path
+    from app.routes.parts import _process_photos
+    from app.services.vehicle_photo import montar_capa
+    from app.services.platform_registry import resolve_account_for_listing
+
+    part = db.query(Part).filter(Part.id == part_id).first()
+    if not part:
+        raise HTTPException(404, "Peça não encontrada")
+
+    originais_dir = Path(settings.uploads_dir) / str(part_id) / "originais"
+    originais_paths = [str(p) for p in sorted(originais_dir.iterdir()) if p.is_file()] if originais_dir.exists() else []
+    if not originais_paths:
+        raise HTTPException(404, f"Sem fotos originais salvas em {originais_dir}")
+
+    _process_photos(part, originais_paths, db)
+    db.refresh(part)
+
+    capa_url = None
+    async with httpx.AsyncClient() as client:
+        try:
+            capa_url = await montar_capa(client, db, part_id, brand, model, year, part.photos[0])
+        except Exception as e:
+            _log(part, "rebuild_capa", f"erro: {e}")
+    if capa_url:
+        part.photos = [capa_url] + list(part.photos)
+    _log(part, "rebuild_fotos", {"fotos": len(part.photos), "capa": bool(capa_url)})
+    db.commit()
+
+    listings = db.query(MarketplaceListing).filter(
+        MarketplaceListing.part_id == part_id,
+        MarketplaceListing.marketplace == "mercadolivre",
+        MarketplaceListing.status == "active",
+    ).all()
+
+    resultados = []
+    pictures = [{"source": url} for url in part.photos[:12]]
+    async with httpx.AsyncClient(timeout=30) as client:
+        for listing in listings:
+            account = await resolve_account_for_listing(listing, db)
+            if not account or not account.get("access_token"):
+                resultados.append({"listing_id": listing.listing_id, "erro": "conta não resolvida"})
+                continue
+            headers = {"Authorization": f"Bearer {account['access_token']}", "Content-Type": "application/json"}
+            r = await client.put(
+                f"https://api.mercadolibre.com/items/{listing.listing_id}",
+                headers=headers, json={"pictures": pictures},
+            )
+            resultados.append({"listing_id": listing.listing_id, "status_code": r.status_code,
+                                "ok": r.status_code == 200})
+    _log(part, "rebuild_push_ml", resultados)
+    db.commit()
+
+    return {"part_id": part_id, "photos": part.photos, "capa": capa_url, "listings_atualizados": resultados}
+
+
 @router.get("/ml-token", dependencies=[Depends(require_service_key)])
 async def get_ml_token(db: Session = Depends(get_db)):
     """Token ML sempre fresco (renova via refresh_token se preciso) — usado pela
