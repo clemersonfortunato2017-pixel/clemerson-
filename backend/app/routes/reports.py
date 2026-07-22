@@ -298,14 +298,21 @@ async def _run_backfill_descricoes(limit: int):
         sem = asyncio.Semaphore(4)
 
         async def processa(part_id: int):
-            async with sem:
+            # Sessão própria por tarefa — SQLAlchemy Session não é seguro pra
+            # uso concorrente entre coroutines, e um único erro de flush (ex:
+            # valor grande demais pra uma coluna) deixa a sessão inteira
+            # "rolled back", derrubando TODAS as tarefas seguintes que
+            # reaproveitassem a mesma sessão (visto na prática: 1 peça com
+            # code_oem grande demais quebrou o resto do lote inteiro).
+            task_db = SessionLocal()
+            try:
                 try:
-                    result = await backfill_part_description(part_id, db)
+                    result = await backfill_part_description(part_id, task_db)
                     if "error" in result:
                         backfill_state["erro"].append({"part_id": part_id, "motivo": result["error"]})
                         return
-                    part = db.query(Part).filter(Part.id == part_id).first()
-                    listings = db.query(MarketplaceListing).filter(
+                    part = task_db.query(Part).filter(Part.id == part_id).first()
+                    listings = task_db.query(MarketplaceListing).filter(
                         MarketplaceListing.part_id == part_id,
                         MarketplaceListing.marketplace == "mercadolivre",
                         MarketplaceListing.status == "active",
@@ -313,7 +320,7 @@ async def _run_backfill_descricoes(limit: int):
                     push_ok = True
                     async with httpx.AsyncClient(timeout=20) as client:
                         for listing in listings:
-                            account = await resolve_account_for_listing(listing, db)
+                            account = await resolve_account_for_listing(listing, task_db)
                             if not account or not account.get("access_token"):
                                 push_ok = False
                                 continue
@@ -335,6 +342,8 @@ async def _run_backfill_descricoes(limit: int):
                     backfill_state["erro"].append({"part_id": part_id, "motivo": str(e)})
                 finally:
                     backfill_state["processed"] += 1
+            finally:
+                task_db.close()
 
         await asyncio.gather(*(processa(pid) for pid in part_ids))
     finally:

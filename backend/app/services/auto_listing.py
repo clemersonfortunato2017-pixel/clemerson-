@@ -96,6 +96,9 @@ async def identify_from_title(client: httpx.AsyncClient, title: str, code_oem: s
         f'Este é o título de um anúncio real de autopeça usada no Mercado Livre: "{title}".{oem_txt} '
         "Extraia o tipo de peça, marca e modelo do veículo, e pesquise (web_search) o range COMPLETO de "
         "anos/versões compatíveis (não só o que está no título) e o código OEM se ainda não for conhecido. "
+        "IMPORTANTE: \"code_oem\" deve ser só o(s) código(s) em si, bem curto (max 90 caracteres) — "
+        "SEM texto explicativo tipo \"(equivalente a...)\" ou marcas de referência cruzada; qualquer "
+        "informação de código equivalente/cross-reference vai só na descrição, nunca nesse campo. "
         "Gere também uma descrição de anúncio pra Mercado Livre: 3-5 linhas, sem emojis, sem HTML, tom "
         "direto de loja de autopeças, SEM mencionar 'usada'/'desmanche'/'retirada de veículo' (o campo de "
         "condição do ML já informa isso), com a compatibilidade completa listada. "
@@ -129,12 +132,17 @@ async def backfill_part_description(part_id: int, db: Session) -> dict:
         part.description = ident["description"]
     if ident.get("brand") and not part.brand:
         part.brand = ident["brand"]
-    if ident.get("code_oem") and not part.code_oem:
-        part.code_oem = ident["code_oem"]
+    # code_oem/oem_code são String(100) no banco — truncar defensivamente
+    # (visto na prática: o modelo às vezes devolve um texto explicativo tipo
+    # "XS6F9F479AB / XS6F9F479AA (equivalente Bosch 0261230027...)" em vez
+    # de só o código, estourando a coluna e derrubando o commit inteiro).
+    code_oem_raw = (ident.get("code_oem") or "")[:95] or None
+    if code_oem_raw and not part.code_oem:
+        part.code_oem = code_oem_raw
     if ident.get("brand") and ident.get("model"):
         vehicle = _get_or_create_vehicle(db, ident["brand"], ident["model"], ident.get("year_start"), ident.get("year_end"))
         if not db.query(Compatibility).filter_by(part_id=part.id, vehicle_id=vehicle.id).first():
-            db.add(Compatibility(part_id=part.id, vehicle_id=vehicle.id, oem_code=ident.get("code_oem")))
+            db.add(Compatibility(part_id=part.id, vehicle_id=vehicle.id, oem_code=code_oem_raw))
     db.commit()
     return {"part_id": part.id, "description": part.description}
 
