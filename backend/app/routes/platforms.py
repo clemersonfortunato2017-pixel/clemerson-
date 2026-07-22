@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models.part import Part, MarketplaceListing, StockMovement
+from app.models.part import Part, MarketplaceListing, StockMovement, Compatibility
 from app.services.platform_registry import (
     close_on_all_accounts, publish_to_all_accounts, get_platforms_status,
     _ml_legacy_account, _fetch_ml_item_detail, MercadoLivrePlatform,
@@ -17,6 +17,22 @@ router = APIRouter(prefix="/platforms", tags=["platforms"], dependencies=[Depend
 class PublishWithReference(BaseModel):
     reference_listing_id: str
     family_name_override: Optional[str] = None
+
+
+def _require_publish_ready(part: Part, db: Session) -> None:
+    """Regra dura sem exceção (Clemerson, 2026-07-22): nenhum anúncio pode
+    ir pro ar sem descrição preenchida e sem pelo menos uma compatibilidade
+    de veículo registrada. Bloqueia bem aqui, no ponto que efetivamente cria
+    o anúncio no ML — não só no status 'ready_to_publish' da esteira, que
+    pode ser contornado publicando direto com publish-with-reference.
+    Motivo real: auditoria de 2026-07-22 encontrou anúncios publicados sem
+    nenhuma descrição, porque o código antigo só tentava enviar a descrição
+    SE ela existisse, sem nunca exigir que existisse antes de publicar."""
+    if not (part.description or "").strip():
+        raise HTTPException(400, "Peça sem descrição preenchida — não pode publicar (regra sem exceção, 2026-07-22)")
+    tem_compat = db.query(Compatibility).filter_by(part_id=part.id).first()
+    if not tem_compat:
+        raise HTTPException(400, "Peça sem nenhuma compatibilidade de veículo registrada — não pode publicar (regra sem exceção, 2026-07-22)")
 
 
 @router.post("/parts/{part_id}/publish-with-reference")
@@ -37,6 +53,7 @@ async def publish_with_reference(part_id: int, data: PublishWithReference, db: S
     part = db.query(Part).filter(Part.id == part_id).first()
     if not part:
         raise HTTPException(404, "Peça não encontrada")
+    _require_publish_ready(part, db)
 
     reference = await _fetch_ml_item_detail(data.reference_listing_id, db)
     if not reference:
@@ -78,6 +95,7 @@ async def publish_ready(part_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Peça não encontrada")
     if part.status != "ready_to_publish":
         raise HTTPException(400, f"Peça não está pronta pra publicar (status atual: {part.status})")
+    _require_publish_ready(part, db)
 
     prep = next((s["detail"] for s in reversed(part.pipeline_log or []) if s.get("step") == "pronto_pra_publicar"), None)
     if not prep or not prep.get("reference_listing_id"):

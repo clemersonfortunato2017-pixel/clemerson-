@@ -205,7 +205,15 @@ async def prepare_part(part_id: int, db: Session) -> dict:
         if not db.query(Compatibility).filter_by(part_id=part.id, vehicle_id=vehicle.id).first():
             db.add(Compatibility(part_id=part.id, vehicle_id=vehicle.id, oem_code=ident.get("code_oem")))
 
-    if reference and ident.get("confidence") in ("high", "medium"):
+    # Regra dura sem exceção (Clemerson, 2026-07-22): nenhuma peça vira
+    # ready_to_publish sem descrição preenchida e sem pelo menos uma
+    # compatibilidade registrada — mesmo gate reforçado na hora de publicar
+    # de verdade (ver _require_publish_ready em routes/platforms.py), mas
+    # checar aqui também evita oferecer o botão "publicar" pra peça incompleta.
+    tem_descricao = bool((part.description or "").strip())
+    tem_compatibilidade = db.query(Compatibility).filter_by(part_id=part.id).first() is not None
+
+    if reference and ident.get("confidence") in ("high", "medium") and tem_descricao and tem_compatibilidade:
         part.status = "ready_to_publish"
         _log_step(part, "pronto_pra_publicar", {
             "reference_listing_id": reference["reference_listing_id"],
@@ -213,7 +221,14 @@ async def prepare_part(part_id: int, db: Session) -> dict:
         })
     else:
         part.status = "needs_review"
-        _log_step(part, "precisa_revisao", "confiança baixa na identificação ou nenhuma peça de referência encontrada no catálogo")
+        motivo = []
+        if not (reference and ident.get("confidence") in ("high", "medium")):
+            motivo.append("confiança baixa na identificação ou nenhuma peça de referência encontrada no catálogo")
+        if not tem_descricao:
+            motivo.append("sem descrição")
+        if not tem_compatibilidade:
+            motivo.append("sem compatibilidade registrada")
+        _log_step(part, "precisa_revisao", " | ".join(motivo))
 
     db.commit()
     return {"part_id": part.id, "status": part.status, "identification": ident, "price": price_info}

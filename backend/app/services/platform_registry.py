@@ -296,18 +296,40 @@ class MercadoLivrePlatform(PlatformBase):
             if r.status_code in (200, 201):
                 data = r.json()
                 # A descrição do ML NÃO faz parte do payload de criação do item —
-                # é um endpoint separado. Sem essa chamada extra, a descrição nunca
-                # ia pro anúncio (silenciosamente ignorada, sem erro nenhum).
+                # é um endpoint separado. Regra sem exceção (2026-07-22): todo
+                # anúncio publicado por aqui já chega com part.description
+                # obrigatório (ver _require_publish_ready em routes/platforms.py)
+                # — aqui só falta garantir que o POST realmente colou, com
+                # verificação de verdade (GET) e 1 retry, em vez de só tentar e
+                # seguir em frente do mesmo jeito silencioso que causou a
+                # auditoria de 2026-07-22 (vários anúncios publicados sem
+                # nenhuma descrição, sem erro nenhum registrado).
                 desc_text = (part.description or part.notes or "").strip()
-                if desc_text:
+                desc_ok = False
+                for tentativa in range(2):
                     try:
                         await client.post(
                             f"https://api.mercadolibre.com/items/{data['id']}/description",
                             json={"plain_text": desc_text[:50000]},
                             headers=headers,
                         )
+                        check = await client.get(f"https://api.mercadolibre.com/items/{data['id']}/description", headers=headers)
+                        if check.status_code == 200 and (check.json().get("plain_text") or "").strip():
+                            desc_ok = True
+                            break
                     except Exception:
                         pass
+                if not desc_ok:
+                    # Regra sem exceção: não deixa um anúncio sem descrição
+                    # confirmada no ar — fecha o item recém-criado em vez de
+                    # devolver sucesso (sem listing_id, pra não criar o
+                    # MarketplaceListing local de um anúncio que não deveria
+                    # existir do jeito que está).
+                    try:
+                        await client.put(f"https://api.mercadolibre.com/items/{data['id']}", json={"status": "closed"}, headers=headers)
+                    except Exception:
+                        pass
+                    return {"error": f"item {data['id']} criado mas descrição não confirmada no ML após 2 tentativas — item fechado automaticamente, corrigir descrição e republicar"}
                 return {"listing_id": data["id"], "url": data.get("permalink", "")}
             return {"error": f"ML {r.status_code}: {r.text[:400]}"}
 
