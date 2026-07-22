@@ -74,13 +74,16 @@ async def push_compatibility_one(part_id: int, db: Session = Depends(get_db)):
     return {"part_id": part_id, "listing_id": listing.listing_id, **result}
 
 
-async def _run_push_compat():
+async def _run_push_compat(limit: int | None = None):
     push_compat_state.update({"running": True, "processed": 0, "pushed": 0, "skipped": 0, "errors": [], "done": False})
     db = SessionLocal()
     try:
         user_id, token = await get_valid_access_token(db)
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        listings = db.query(MarketplaceListing).filter(MarketplaceListing.marketplace == "mercadolivre").all()
+        query = db.query(MarketplaceListing).filter(
+            MarketplaceListing.marketplace == "mercadolivre", MarketplaceListing.status == "active",
+        )
+        listings = query.limit(limit).all() if limit else query.all()
         async with httpx.AsyncClient(timeout=30) as client:
             for listing in listings:
                 push_compat_state["processed"] += 1
@@ -103,14 +106,16 @@ async def _run_push_compat():
 
 
 @router.post("/push-compatibility")
-def push_compatibility_all(background_tasks: BackgroundTasks):
-    """Envia em lote a compatibilidade (já cadastrada no Pitbox) de TODAS as
-    peças com anúncio ML pro ML de verdade — corrige anúncios que caem
-    'Inativo para revisar' por falta de ficha técnica de veículos."""
+def push_compatibility_all(background_tasks: BackgroundTasks, limit: int | None = None):
+    """Envia em lote a compatibilidade (já cadastrada no Pitbox) das peças
+    com anúncio ML ativo pro ML de verdade — corrige anúncios que caem
+    'Inativo para revisar' por falta de ficha técnica de veículos. `limit`
+    processa só as N primeiras (rodar em lotes menores em vez do catálogo
+    inteiro de uma vez)."""
     if push_compat_state["running"]:
         return {"status": "already_running", **push_compat_state}
-    background_tasks.add_task(_run_push_compat)
-    return {"status": "started"}
+    background_tasks.add_task(_run_push_compat, limit)
+    return {"status": "started", "limit": limit}
 
 
 @router.get("/push-compatibility/status")
