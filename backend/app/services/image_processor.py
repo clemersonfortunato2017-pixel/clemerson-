@@ -6,6 +6,7 @@ esteira automática não depender de nada local."""
 import gc
 import io
 import os
+import httpx
 from pathlib import Path
 from PIL import Image
 from app.config import settings
@@ -19,6 +20,8 @@ try:
     REMBG_OK = True
 except ImportError:
     REMBG_OK = False
+
+PHOTOROOM_API = "https://sdk.photoroom.com/v1/segment"
 
 TAMANHO_ALVO = (1000, 1000)
 QUALIDADE = 88
@@ -36,16 +39,45 @@ AREA_MAX_FRACAO = 0.98
 PADDING_FRACAO = 0.06  # margem ao redor da peça depois de recortar pelo bounding box
 
 
-def _remover_fundo(img: Image.Image, session) -> Image.Image | None:
-    """Retorna a imagem com fundo removido (RGBA), ou None se o recorte saiu
-    claramente errado (área da peça fora da faixa aceitável)."""
-    if not REMBG_OK:
+def _remover_fundo_photoroom(img: Image.Image) -> Image.Image | None:
+    """Remove fundo via API do Photoroom (qualidade melhor que rembg pra
+    peça reflexiva/escura, segundo teste do usuário) — None se a chave não
+    estiver configurada ou a chamada falhar, pra sempre cair no fallback."""
+    if not settings.photoroom_api_key:
         return None
     buf = io.BytesIO()
-    img.save(buf, format="PNG")
+    img.save(buf, format="JPEG", quality=95)
     buf.seek(0)
-    resultado = rembg_remove(buf.read(), session=session)
-    sem_fundo = Image.open(io.BytesIO(resultado)).convert("RGBA")
+    try:
+        r = httpx.post(
+            PHOTOROOM_API,
+            headers={"x-api-key": settings.photoroom_api_key},
+            files={"image_file": ("foto.jpg", buf.read(), "image/jpeg")},
+            timeout=30,
+        )
+        if r.status_code != 200:
+            return None
+        return Image.open(io.BytesIO(r.content)).convert("RGBA")
+    except Exception:
+        return None
+
+
+def _remover_fundo(img: Image.Image, session) -> Image.Image | None:
+    """Retorna a imagem com fundo removido (RGBA), ou None se o recorte saiu
+    claramente errado (área da peça fora da faixa aceitável). Tenta Photoroom
+    primeiro (melhor qualidade); se a chave não estiver configurada ou a
+    chamada falhar, cai pro rembg local — nunca deixa a peça sem nenhuma
+    tentativa de remover fundo só por causa de uma API externa fora do ar."""
+    sem_fundo = _remover_fundo_photoroom(img)
+    if sem_fundo is None and REMBG_OK:
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        resultado = rembg_remove(buf.read(), session=session)
+        sem_fundo = Image.open(io.BytesIO(resultado)).convert("RGBA")
+
+    if sem_fundo is None:
+        return None
 
     alpha = sem_fundo.split()[3]
     bbox = alpha.getbbox()
