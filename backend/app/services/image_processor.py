@@ -37,6 +37,18 @@ MAX_ENTRADA = (2000, 2000)
 AREA_MIN_FRACAO = 0.03
 AREA_MAX_FRACAO = 0.98
 PADDING_FRACAO = 0.06  # margem ao redor da peça depois de recortar pelo bounding box
+# Limiar de alpha pra decidir bounding box da peça (área sólida), ignorando a
+# sombra/halo de baixa opacidade que o Photoroom (e o rembg) deixam nas bordas
+# do recorte. Visto em teste real 2026-07-21: alpha.getbbox() (que conta
+# qualquer pixel com alpha>0) devolvia quase a imagem inteira inteira mesmo
+# com o recorte de fato ocupando só ~16% da foto — o bounding box "vazava"
+# até a borda por causa desse halo semi-transparente, disparando o fallback
+# pra foto original em 100% dos casos.
+ALPHA_LIMIAR_BBOX = 50
+
+
+def _bbox_solido(alpha: Image.Image) -> tuple[int, int, int, int] | None:
+    return alpha.point(lambda p: 255 if p > ALPHA_LIMIAR_BBOX else 0).getbbox()
 
 
 def _remover_fundo_photoroom(img: Image.Image) -> Image.Image | None:
@@ -84,7 +96,7 @@ def _remover_fundo(img: Image.Image, session) -> Image.Image | None:
         return None
 
     alpha = sem_fundo.split()[3]
-    bbox = alpha.getbbox()
+    bbox = _bbox_solido(alpha)
     if bbox is None:
         return None
     area_frac = ((bbox[2] - bbox[0]) * (bbox[3] - bbox[1])) / (sem_fundo.width * sem_fundo.height)
@@ -104,7 +116,7 @@ def otimizar_imagem(origem: Path, destino: Path, session) -> Path:
 
         if img_sem_fundo is not None:
             alpha = img_sem_fundo.split()[3]
-            bbox = alpha.getbbox()
+            bbox = _bbox_solido(alpha)
             pad_x = int((bbox[2] - bbox[0]) * PADDING_FRACAO)
             pad_y = int((bbox[3] - bbox[1]) * PADDING_FRACAO)
             crop_box = (
