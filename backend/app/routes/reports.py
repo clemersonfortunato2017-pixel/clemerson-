@@ -372,3 +372,66 @@ def backfill_descricoes_start(background_tasks: BackgroundTasks, limit: int = 5)
 @router.get("/backfill-descricoes/status")
 def backfill_descricoes_status():
     return backfill_state
+
+
+compat_audit_state = {"running": False, "processed": 0, "total": 0, "incompletos": [], "done": True}
+
+
+async def _run_audit_compatibilidade():
+    """Varre TODOS os anúncios ML ativos (todas as contas) e marca quais têm
+    a tag 'incomplete_compatibilities' — é essa tag que faz o ML mostrar
+    'Inativo para revisar / Não indica os veículos compatíveis' no painel do
+    vendedor. A tag só aparece no detalhe completo do item (GET /items/{id}),
+    não no resultado de busca em lote."""
+    compat_audit_state.update({"running": True, "processed": 0, "total": 0, "incompletos": [], "done": False})
+    db = SessionLocal()
+    try:
+        accounts = await get_accounts_for_platform("mercadolivre", db)
+        pares = []  # (listing_id, account)
+        for account in accounts:
+            if not account.get("external_id") or not account.get("access_token"):
+                continue
+            headers = {"Authorization": f"Bearer {account['access_token']}"}
+            async with httpx.AsyncClient(timeout=20) as client:
+                ids = await fetch_all_item_ids(account["external_id"], headers, client)
+            for iid in ids:
+                pares.append((iid, account))
+        compat_audit_state["total"] = len(pares)
+
+        sem = asyncio.Semaphore(8)
+
+        async def checa(listing_id: str, account: dict):
+            async with sem:
+                try:
+                    headers = {"Authorization": f"Bearer {account['access_token']}"}
+                    async with httpx.AsyncClient(timeout=15) as client:
+                        r = await client.get(f"https://api.mercadolibre.com/items/{listing_id}", headers=headers)
+                    if r.status_code == 200:
+                        item = r.json()
+                        if "incomplete_compatibilities" in (item.get("tags") or []):
+                            compat_audit_state["incompletos"].append({
+                                "listing_id": listing_id, "conta": account["label"],
+                                "title": item.get("title"), "status": item.get("status"),
+                            })
+                except Exception:
+                    pass
+                finally:
+                    compat_audit_state["processed"] += 1
+
+        await asyncio.gather(*(checa(iid, acc) for iid, acc in pares))
+    finally:
+        compat_audit_state.update({"running": False, "done": True})
+        db.close()
+
+
+@router.post("/audit-compatibilidade")
+def audit_compatibilidade_start(background_tasks: BackgroundTasks):
+    if compat_audit_state["running"]:
+        return {"status": "already_running", **compat_audit_state}
+    background_tasks.add_task(_run_audit_compatibilidade)
+    return {"status": "started"}
+
+
+@router.get("/audit-compatibilidade/status")
+def audit_compatibilidade_status():
+    return compat_audit_state
