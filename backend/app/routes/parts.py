@@ -94,6 +94,16 @@ def _process_photos(part: Part, originais_paths: list[str], db: Session):
         part.photos = otimizadas
         part.status = "draft"  # pronta p/ a rotina agendada (Passo A3) identificar e publicar
         _log_step(part, "otimizacao_foto", f"{len(otimizadas)} foto(s) otimizada(s)")
+
+        # Limpa a foto bruta (originais/) assim que a otimização dá certo —
+        # ela só serve de backup pra recuperar via /internal/parts/{id}/reprocess
+        # se o servidor cair no meio do processamento, o que já passou aqui.
+        # Sem isso o volume de uploads enche sozinho com o tempo (visto na
+        # prática em 2026-07-23: 239MB de foto bruta acumulada, volume
+        # bateu no limite de 500MB e travou todo upload novo).
+        import shutil
+        originais_dir = Path(settings.uploads_dir) / str(part.id) / "originais"
+        shutil.rmtree(originais_dir, ignore_errors=True)
     except Exception as e:
         part.status = "error"
         _log_step(part, "otimizacao_foto", f"erro: {e}")
