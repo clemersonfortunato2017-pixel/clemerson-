@@ -364,6 +364,15 @@ def mark_error(part_id: int, data: ErrorResult, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
+@router.get("/parts/stuck-diag", dependencies=[Depends(require_service_key)])
+def stuck_parts_diag(db: Session = Depends(get_db)):
+    """DIAGNÓSTICO TEMPORÁRIO — remover depois. Lista peças em draft com o
+    pipeline_log completo, pra ver por que ficaram presas sem serem
+    submetidas ao batch de identificação."""
+    parts = db.query(Part).filter(Part.status == "draft", Part.active == True).all()  # noqa: E712
+    return [{"id": p.id, "batch_id": p.batch_id, "pipeline_log": p.pipeline_log} for p in parts]
+
+
 @router.post("/batch-submit-diag", dependencies=[Depends(require_service_key)])
 async def batch_submit_diag(db: Session = Depends(get_db)):
     """DIAGNÓSTICO TEMPORÁRIO — remover depois. Roda submit_identification_batch
