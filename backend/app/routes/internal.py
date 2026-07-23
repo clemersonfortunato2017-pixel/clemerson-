@@ -44,23 +44,6 @@ def list_pending_parts(db: Session = Depends(get_db)):
     ]
 
 
-@router.get("/parts/errors", dependencies=[Depends(require_service_key)])
-def list_error_parts(db: Session = Depends(get_db)):
-    """Diagnostico temporario: lista peças em status=error com o pipeline_log
-    completo, pra investigar o motivo real (a UI só mostra str(exception))."""
-    parts = db.query(Part).filter(Part.status == "error").order_by(Part.id.desc()).limit(20).all()
-    return [{"id": p.id, "title": p.title, "photos": p.photos, "pipeline_log": p.pipeline_log} for p in parts]
-
-
-@router.post("/parts/{part_id}/retry-identification", dependencies=[Depends(require_service_key)])
-async def retry_identification(part_id: int, db: Session = Depends(get_db)):
-    """Diagnostico temporario: roda prepare_part() de novo numa peça em erro,
-    sem depender do loop de 10 min."""
-    from app.services.auto_listing import prepare_part
-    result = await prepare_part(part_id, db)
-    return result
-
-
 @router.post("/parts/{part_id}/reprocess", dependencies=[Depends(require_service_key)])
 def reprocess_stuck_part(part_id: int, db: Session = Depends(get_db)):
     """Recupera peça travada em status=processing (ex: deploy do backend
