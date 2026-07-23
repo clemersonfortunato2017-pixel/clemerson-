@@ -364,6 +364,21 @@ def mark_error(part_id: int, data: ErrorResult, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
+@router.post("/batch-submit-diag", dependencies=[Depends(require_service_key)])
+async def batch_submit_diag(db: Session = Depends(get_db)):
+    """DIAGNÓSTICO TEMPORÁRIO — remover depois. Roda submit_identification_batch
+    manualmente e devolve o erro real (o loop de fundo engole exceção)."""
+    from app.services.auto_listing import submit_identification_batch
+    pending = db.query(Part).filter(Part.status == "draft", Part.active == True).all()  # noqa: E712
+    to_submit = [p for p in pending if not any(s.get("step") == "identificacao" for s in (p.pipeline_log or []))]
+    try:
+        result = await submit_identification_batch(to_submit, db)
+        return {"ok": True, "candidatos": len(to_submit), "result": result}
+    except Exception as e:
+        import traceback
+        return {"ok": False, "candidatos": len(to_submit), "erro": str(e), "trace": traceback.format_exc()[-2000:]}
+
+
 @router.get("/disk-diag", dependencies=[Depends(require_service_key)])
 def disk_diag():
     """DIAGNÓSTICO TEMPORÁRIO — remover depois. Mostra ocupação real do
