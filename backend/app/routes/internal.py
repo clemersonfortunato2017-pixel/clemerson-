@@ -88,6 +88,20 @@ def uploads_cleanup_originais(db: Session = Depends(get_db)):
     return {"pastas_removidas": removed, "espaco_liberado_mb": round(freed / 1024 / 1024, 1)}
 
 
+@router.get("/disk-free-diag", dependencies=[Depends(require_service_key)])
+def disk_free_diag():
+    """Diagnostico temporario: espaco livre real do SO no volume de uploads
+    (shutil.disk_usage), pra confirmar se a limpeza realmente liberou espaco
+    (o painel do Railway pode demorar pra atualizar o numero mostrado)."""
+    import shutil
+    total, used, free = shutil.disk_usage(settings.uploads_dir)
+    return {
+        "total_mb": round(total / 1024 / 1024, 1),
+        "usado_mb": round(used / 1024 / 1024, 1),
+        "livre_mb": round(free / 1024 / 1024, 1),
+    }
+
+
 @router.get("/parts/pending", dependencies=[Depends(require_service_key)])
 def list_pending_parts(db: Session = Depends(get_db)):
     """Peças com foto já otimizada aguardando a esteira (status=draft) — é
