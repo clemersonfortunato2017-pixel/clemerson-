@@ -362,3 +362,33 @@ def mark_error(part_id: int, data: ErrorResult, db: Session = Depends(get_db)):
     _log(part, data.step, {"erro": data.reason})
     db.commit()
     return {"ok": True}
+
+
+@router.get("/disk-diag", dependencies=[Depends(require_service_key)])
+def disk_diag():
+    """DIAGNÓSTICO TEMPORÁRIO — remover depois. Mostra ocupação real do
+    volume por subpasta pra descobrir o que está enchendo de novo."""
+    import shutil
+    from pathlib import Path
+
+    total, used, free = shutil.disk_usage(settings.uploads_dir)
+    root = Path(settings.uploads_dir)
+    pastas = []
+    if root.exists():
+        for part_dir in root.iterdir():
+            if not part_dir.is_dir():
+                continue
+            size = sum(f.stat().st_size for f in part_dir.rglob("*") if f.is_file())
+            subpastas = {}
+            for sub in part_dir.iterdir():
+                if sub.is_dir():
+                    subpastas[sub.name] = round(sum(f.stat().st_size for f in sub.rglob("*") if f.is_file()) / 1024 / 1024, 2)
+            pastas.append({"part_id": part_dir.name, "total_mb": round(size / 1024 / 1024, 2), "subpastas_mb": subpastas})
+    pastas.sort(key=lambda p: -p["total_mb"])
+    return {
+        "total_mb": round(total / 1024 / 1024, 1),
+        "usado_mb": round(used / 1024 / 1024, 1),
+        "livre_mb": round(free / 1024 / 1024, 1),
+        "top_pastas": pastas[:20],
+        "total_pastas": len(pastas),
+    }
