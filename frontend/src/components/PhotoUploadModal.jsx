@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Camera, Loader2, X } from 'lucide-react'
 import { uploadPhotos } from '../api'
 
-export const MIN_PHOTOS = 6 // mais que 5, por pedido do Clemerson — evita anúncio com peça mal fotografada
+export const MIN_PHOTOS = 4 // reduzido de 6 pra 4 em 2026-07-23 (Clemerson) — menos fotos = menos custo de IA na identificação
 
 export default function PhotoUploadModal({ onClose }) {
   const [files, setFiles] = useState([])
