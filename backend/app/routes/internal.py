@@ -364,55 +364,15 @@ def mark_error(part_id: int, data: ErrorResult, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
-@router.get("/parts/stuck-diag", dependencies=[Depends(require_service_key)])
-def stuck_parts_diag(db: Session = Depends(get_db)):
-    """DIAGNÓSTICO TEMPORÁRIO — remover depois. Lista peças em draft com o
-    pipeline_log completo, pra ver por que ficaram presas sem serem
-    submetidas ao batch de identificação."""
-    parts = db.query(Part).filter(Part.status == "draft", Part.active == True).all()  # noqa: E712
-    return [{"id": p.id, "batch_id": p.batch_id, "pipeline_log": p.pipeline_log} for p in parts]
-
-
-@router.post("/batch-submit-diag", dependencies=[Depends(require_service_key)])
-async def batch_submit_diag(db: Session = Depends(get_db)):
-    """DIAGNÓSTICO TEMPORÁRIO — remover depois. Roda submit_identification_batch
-    manualmente e devolve o erro real (o loop de fundo engole exceção)."""
+@router.post("/parts/submit-pending-batch", dependencies=[Depends(require_service_key)])
+async def submit_pending_batch(db: Session = Depends(get_db)):
+    """Submete manualmente ao batch de identificação todas as peças em draft
+    que ainda não estão publicadas — usado pra destravar peças presas sem
+    esperar o próximo ciclo do loop automático (10 min)."""
     from app.services.auto_listing import submit_identification_batch
+    listed_ids = {r[0] for r in db.query(MarketplaceListing.part_id).filter(MarketplaceListing.status == "active").all()}
     pending = db.query(Part).filter(Part.status == "draft", Part.active == True).all()  # noqa: E712
-    to_submit = [p for p in pending if not any(s.get("step") == "identificacao" for s in (p.pipeline_log or []))]
-    try:
-        result = await submit_identification_batch(to_submit, db)
-        return {"ok": True, "candidatos": len(to_submit), "result": result}
-    except Exception as e:
-        import traceback
-        return {"ok": False, "candidatos": len(to_submit), "erro": str(e), "trace": traceback.format_exc()[-2000:]}
-
-
-@router.get("/disk-diag", dependencies=[Depends(require_service_key)])
-def disk_diag():
-    """DIAGNÓSTICO TEMPORÁRIO — remover depois. Mostra ocupação real do
-    volume por subpasta pra descobrir o que está enchendo de novo."""
-    import shutil
-    from pathlib import Path
-
-    total, used, free = shutil.disk_usage(settings.uploads_dir)
-    root = Path(settings.uploads_dir)
-    pastas = []
-    if root.exists():
-        for part_dir in root.iterdir():
-            if not part_dir.is_dir():
-                continue
-            size = sum(f.stat().st_size for f in part_dir.rglob("*") if f.is_file())
-            subpastas = {}
-            for sub in part_dir.iterdir():
-                if sub.is_dir():
-                    subpastas[sub.name] = round(sum(f.stat().st_size for f in sub.rglob("*") if f.is_file()) / 1024 / 1024, 2)
-            pastas.append({"part_id": part_dir.name, "total_mb": round(size / 1024 / 1024, 2), "subpastas_mb": subpastas})
-    pastas.sort(key=lambda p: -p["total_mb"])
-    return {
-        "total_mb": round(total / 1024 / 1024, 1),
-        "usado_mb": round(used / 1024 / 1024, 1),
-        "livre_mb": round(free / 1024 / 1024, 1),
-        "top_pastas": pastas[:20],
-        "total_pastas": len(pastas),
-    }
+    to_submit = [p for p in pending if p.id not in listed_ids]
+    if not to_submit:
+        return {"submitted": 0}
+    return await submit_identification_batch(to_submit, db)

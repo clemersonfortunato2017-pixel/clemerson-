@@ -92,12 +92,13 @@ async def _auto_prepare_loop():
             try:
                 from app.models.part import MarketplaceListing
                 listed_ids = {r[0] for r in db.query(MarketplaceListing.part_id).filter(MarketplaceListing.status == "active").all()}
+                # status == "draft" já garante que a peça não está em batch_pending
+                # nem já processada — checar "identificacao" no pipeline_log além
+                # disso trava pra sempre peças cuja PRIMEIRA tentativa deu erro
+                # (ex: credito Anthropic esgotado), porque o erro também grava um
+                # passo "identificacao" no log (bug real, 2026-07-23).
                 pending = db.query(Part).filter(Part.status == "draft", Part.active == True).all()  # noqa: E712
-                to_submit = [
-                    p for p in pending
-                    if p.id not in listed_ids
-                    and not any(s.get("step") == "identificacao" for s in (p.pipeline_log or []))
-                ]
+                to_submit = [p for p in pending if p.id not in listed_ids]
                 if to_submit:
                     await submit_identification_batch(to_submit, db)
             except Exception:
