@@ -16,7 +16,31 @@ from app.config import settings
 from app.models.part import Part, MarketplaceListing, Vehicle, Compatibility
 
 ANTHROPIC_API = "https://api.anthropic.com/v1/messages"
+ANTHROPIC_BATCHES_API = "https://api.anthropic.com/v1/messages/batches"
 MODEL = "claude-sonnet-5"  # Haiku errou marca/modelo num teste real (Hyundai Creta virou "Chevrolet Cruze") — Sonnet lê etiqueta/gravação com mais precisão, custo ainda baixo pro volume da loja
+
+IDENTIFY_PROMPT = (
+    "Estas são fotos de uma autopeça usada, tiradas por um lojista brasileiro pra "
+    "anunciar no Mercado Livre. Identifique a peça e o(s) veículo(s) compatível(is). "
+    "IMPORTANTE: se houver texto escrito à mão (caneta/marcador) ou etiqueta/código "
+    "gravado na peça indicando o veículo, isso é a fonte MAIS confiável — use isso "
+    "antes de tentar adivinhar pela forma/desenho da peça (peças de tipos parecidos "
+    "existem pra marcas diferentes, é fácil confundir só pelo formato). "
+    "Se não conseguir ler nenhum texto/código com clareza, marque confidence como "
+    "'low' em vez de arriscar um palpite. "
+    "Responda APENAS com um JSON (sem texto antes/depois) no formato:\n"
+    '{"part_type": "nome genérico da peça (ex: Comando Seta Limpador)", '
+    '"brand": "marca do veículo", "model": "modelo do veículo", '
+    '"year_start": 2018, "year_end": 2021, '
+    '"code_oem": "código gravado/etiqueta, ou null se não visível", '
+    '"condition": "used ou new", '
+    '"title": "título comercial curto no padrão ML, até 60 caracteres, '
+    'ex: Comando Seta Limpador C Anel Airbag Ford Ka 2018 A 2021", '
+    '"description": "descrição de anúncio pra Mercado Livre, 3-5 linhas: o que é a '
+    'peça, condição (peça usada, testada/funcionando), compatibilidade, aviso de '
+    'conferir compatibilidade antes de comprar. Tom direto de loja de autopeças.", '
+    '"confidence": "high, medium ou low"}'
+)
 
 
 def _log_step(part: Part, step: str, detail) -> None:
@@ -53,34 +77,17 @@ def _extract_json(text: str) -> dict:
     return json.loads(text[start:end + 1])
 
 
-async def identify_part(client: httpx.AsyncClient, photo_urls: list[str]) -> dict:
-    """Manda as fotos pro Claude e pede identificação estruturada."""
+def _build_identify_content(photo_urls: list[str]) -> list:
     content = [{"type": "image", "source": {"type": "url", "url": url}} for url in photo_urls[:7]]
-    content.append({
-        "type": "text",
-        "text": (
-            "Estas são fotos de uma autopeça usada, tiradas por um lojista brasileiro pra "
-            "anunciar no Mercado Livre. Identifique a peça e o(s) veículo(s) compatível(is). "
-            "IMPORTANTE: se houver texto escrito à mão (caneta/marcador) ou etiqueta/código "
-            "gravado na peça indicando o veículo, isso é a fonte MAIS confiável — use isso "
-            "antes de tentar adivinhar pela forma/desenho da peça (peças de tipos parecidos "
-            "existem pra marcas diferentes, é fácil confundir só pelo formato). "
-            "Se não conseguir ler nenhum texto/código com clareza, marque confidence como "
-            "'low' em vez de arriscar um palpite. "
-            "Responda APENAS com um JSON (sem texto antes/depois) no formato:\n"
-            '{"part_type": "nome genérico da peça (ex: Comando Seta Limpador)", '
-            '"brand": "marca do veículo", "model": "modelo do veículo", '
-            '"year_start": 2018, "year_end": 2021, '
-            '"code_oem": "código gravado/etiqueta, ou null se não visível", '
-            '"condition": "used ou new", '
-            '"title": "título comercial curto no padrão ML, até 60 caracteres, '
-            'ex: Comando Seta Limpador C Anel Airbag Ford Ka 2018 A 2021", '
-            '"description": "descrição de anúncio pra Mercado Livre, 3-5 linhas: o que é a '
-            'peça, condição (peça usada, testada/funcionando), compatibilidade, aviso de '
-            'conferir compatibilidade antes de comprar. Tom direto de loja de autopeças.", '
-            '"confidence": "high, medium ou low"}'
-        ),
-    })
+    content.append({"type": "text", "text": IDENTIFY_PROMPT})
+    return content
+
+
+async def identify_part(client: httpx.AsyncClient, photo_urls: list[str]) -> dict:
+    """Manda as fotos pro Claude e pede identificação estruturada (chamada
+    individual — usada como fallback; o fluxo principal usa a Batch API,
+    ver submit_identification_batch/poll_identification_batches)."""
+    content = _build_identify_content(photo_urls)
     resp = await _claude_call(client, [{"role": "user", "content": content}])
     text = "".join(b.get("text", "") for b in resp.get("content", []) if b.get("type") == "text")
     return _extract_json(text)
@@ -208,27 +215,13 @@ def _get_or_create_vehicle(db: Session, brand: str, model: str, y1, y2) -> Vehic
     return v
 
 
-async def prepare_part(part_id: int, db: Session) -> dict:
-    """Identifica + pesquisa preço + prepara peça pra publicação com 1 clique.
-    NUNCA chama a API do Mercado Livre — só deixa a peça em status
-    'ready_to_publish' com tudo preenchido."""
-    part = db.query(Part).filter(Part.id == part_id).first()
-    if not part or not part.photos:
-        return {"error": "peça não encontrada ou sem fotos"}
+async def _finish_prepare_part(part: Part, ident: dict, db: Session) -> dict:
+    """Continua o pipeline depois que a identificação já veio pronta (seja de
+    uma chamada direta ou de um resultado de batch): pesquisa de preço, foto
+    de capa, referência de catálogo, grava os campos e decide o status final."""
+    _log_step(part, "identificacao", ident)
 
     async with httpx.AsyncClient() as client:
-        try:
-            ident = await identify_part(client, part.photos)
-        except Exception as e:
-            import traceback
-            tb = traceback.format_exc()
-            _log_step(part, "identificacao", f"erro: {e} | {tb[-800:]}")
-            part.status = "error"
-            db.commit()
-            return {"error": str(e)}
-
-        _log_step(part, "identificacao", ident)
-
         query = f"{ident.get('part_type', '')} {ident.get('brand', '')} {ident.get('model', '')} {ident.get('year_start', '')}"
         try:
             price_info = await research_price(client, query)
@@ -301,3 +294,134 @@ async def prepare_part(part_id: int, db: Session) -> dict:
 
     db.commit()
     return {"part_id": part.id, "status": part.status, "identification": ident, "price": price_info}
+
+
+async def prepare_part(part_id: int, db: Session) -> dict:
+    """Identifica + pesquisa preço + prepara peça pra publicação com 1 clique,
+    numa única chamada direta (fora do batch). Mantido como fallback pra
+    reprocessar uma peça específica sem esperar o próximo ciclo de batch.
+    NUNCA chama a API do Mercado Livre — só deixa a peça em status
+    'ready_to_publish' com tudo preenchido."""
+    part = db.query(Part).filter(Part.id == part_id).first()
+    if not part or not part.photos:
+        return {"error": "peça não encontrada ou sem fotos"}
+
+    async with httpx.AsyncClient() as client:
+        try:
+            ident = await identify_part(client, part.photos)
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            _log_step(part, "identificacao", f"erro: {e} | {tb[-800:]}")
+            part.status = "error"
+            db.commit()
+            return {"error": str(e)}
+
+    return await _finish_prepare_part(part, ident, db)
+
+
+async def submit_identification_batch(parts: list[Part], db: Session) -> dict:
+    """Manda a identificação de várias peças de uma vez pra Batch API da
+    Anthropic (50% mais barato que uma chamada por peça — a esteira já roda
+    em background sem ninguém esperando resposta na hora, então não precisa
+    ser síncrono). NÃO processa o resultado aqui — só submete e marca
+    status=batch_pending; quem processa é poll_identification_batches(),
+    chamada no próximo ciclo do loop."""
+    if not parts:
+        return {"submitted": 0}
+
+    requests = [
+        {
+            "custom_id": f"identify-{part.id}",
+            "params": {
+                "model": MODEL,
+                "max_tokens": 1024,
+                "messages": [{"role": "user", "content": _build_identify_content(part.photos)}],
+            },
+        }
+        for part in parts
+    ]
+
+    key = settings.anthropic_api_key
+    headers = {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
+    async with httpx.AsyncClient() as client:
+        r = await client.post(ANTHROPIC_BATCHES_API, headers=headers, json={"requests": requests}, timeout=60)
+        if r.status_code >= 400:
+            raise RuntimeError(f"Anthropic Batches API {r.status_code}: {r.text[:1000]}")
+        batch = r.json()
+
+    batch_id = batch["id"]
+    for part in parts:
+        part.batch_id = batch_id
+        part.status = "batch_pending"
+        _log_step(part, "batch_submetido", {"batch_id": batch_id})
+    db.commit()
+    return {"submitted": len(parts), "batch_id": batch_id}
+
+
+async def poll_identification_batches(db: Session) -> dict:
+    """Verifica os batches de identificação pendentes; quando um termina
+    (processing_status == "ended"), lê os resultados e continua o resto do
+    pipeline (preço, capa, validação) pra cada peça — igual o prepare_part()
+    fazia, só que a identificação já veio pronta do batch em vez de uma
+    chamada individual."""
+    pending_batch_ids = {
+        r[0] for r in db.query(Part.batch_id)
+        .filter(Part.status == "batch_pending", Part.batch_id.isnot(None))
+        .distinct().all()
+    }
+    if not pending_batch_ids:
+        return {"processed": 0, "still_running": 0}
+
+    key = settings.anthropic_api_key
+    headers = {"x-api-key": key, "anthropic-version": "2023-06-01"}
+    processed = 0
+    still_running = 0
+    async with httpx.AsyncClient() as client:
+        for batch_id in pending_batch_ids:
+            r = await client.get(f"{ANTHROPIC_BATCHES_API}/{batch_id}", headers=headers, timeout=30)
+            if r.status_code >= 400:
+                continue
+            batch = r.json()
+            if batch.get("processing_status") != "ended":
+                still_running += 1
+                continue  # ainda rodando, tenta de novo no próximo ciclo (10 min)
+
+            results_url = batch["results_url"]
+            rr = await client.get(results_url, headers=headers, timeout=60)
+            for line in rr.text.strip().split("\n"):
+                if not line:
+                    continue
+                item = json.loads(line)
+                custom_id = item.get("custom_id", "")
+                if not custom_id.startswith("identify-"):
+                    continue
+                part_id = int(custom_id.split("-", 1)[1])
+                part = db.query(Part).filter(Part.id == part_id).first()
+                if not part or part.batch_id != batch_id:
+                    continue  # peça já foi reprocessada por outro caminho nesse meio tempo
+
+                result = item.get("result", {})
+                if result.get("type") != "succeeded":
+                    _log_step(part, "identificacao", f"erro no batch: {result}")
+                    part.status = "error"
+                    part.batch_id = None
+                    db.commit()
+                    continue
+
+                message = result.get("message", {})
+                text_out = "".join(b.get("text", "") for b in message.get("content", []) if b.get("type") == "text")
+                try:
+                    ident = _extract_json(text_out)
+                except Exception as e:
+                    _log_step(part, "identificacao", f"erro parse JSON do batch: {e}")
+                    part.status = "error"
+                    part.batch_id = None
+                    db.commit()
+                    continue
+
+                part.batch_id = None
+                await _finish_prepare_part(part, ident, db)
+                processed += 1
+
+    return {"processed": processed, "still_running": still_running}

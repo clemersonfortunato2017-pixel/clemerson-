@@ -35,8 +35,12 @@ class Part(Base):
     notes = Column(Text)
     active = Column(Boolean, default=True)
     # Esteira automática de anúncio (upload de foto -> publicação sem revisão humana)
-    status = Column(String(20), default="draft")  # draft, processing, published, error
+    status = Column(String(20), default="draft")  # draft, batch_pending, processing, published, error, needs_review, ready_to_publish
     pipeline_log = Column(JSON, default=list)      # histórico de etapas/decisões/erros da esteira
+    # ID do lote (Batch API da Anthropic) enquanto a identificação por foto
+    # está processando em batch — 50% mais barato que chamada individual,
+    # ver app/services/auto_listing.py. Null quando não há batch pendente.
+    batch_id = Column(String(100), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

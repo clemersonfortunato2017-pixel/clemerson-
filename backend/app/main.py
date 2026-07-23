@@ -29,6 +29,7 @@ def _migrate_new_columns():
         "ALTER TABLE vehicles ADD COLUMN ml_brand_value_id VARCHAR(50)",
         "ALTER TABLE vehicles ADD COLUMN ml_model_value_id VARCHAR(50)",
         "ALTER TABLE sales ADD COLUMN platform_account_id INTEGER",
+        "ALTER TABLE parts ADD COLUMN batch_id VARCHAR(100)",
     ]
     with engine.connect() as conn:
         for stmt in stmts:
@@ -68,12 +69,15 @@ app.include_router(feed.router)
 
 async def _auto_prepare_loop():
     """Roda dentro do próprio servidor, pra sempre, sem precisar de sessão de
-    chat nenhuma aberta — a cada 10 min olha se tem peça esperando
-    identificação e já deixa pronta (título/preço/compatibilidade), nunca
-    publica sozinha (isso é sempre um clique do usuário, ver
+    chat nenhuma aberta — a cada 10 min (1) coleta resultados de batches de
+    identificação que já terminaram e (2) submete um novo batch com as peças
+    que estão esperando (Batch API da Anthropic, 50% mais barato que uma
+    chamada por peça — decisão do Clemerson em 2026-07-23, a esteira roda em
+    background mesmo então não tem motivo pra pagar o preço de latência
+    baixa). Nunca publica sozinha (isso é sempre um clique do usuário, ver
     /platforms/parts/{id}/publish-ready). Decisão do Clemerson em
     2026-07-20: a esteira tem que andar sozinha sem ele precisar pedir."""
-    from app.services.auto_listing import prepare_part
+    from app.services.auto_listing import submit_identification_batch, poll_identification_batches
 
     while True:
         await asyncio.sleep(600)
@@ -81,17 +85,23 @@ async def _auto_prepare_loop():
             continue
         db = SessionLocal()
         try:
-            from app.models.part import MarketplaceListing
-            listed_ids = {r[0] for r in db.query(MarketplaceListing.part_id).filter(MarketplaceListing.status == "active").all()}
-            pending = db.query(Part).filter(Part.status == "draft", Part.active == True).all()  # noqa: E712
-            for part in pending:
-                already = any(s.get("step") == "identificacao" for s in (part.pipeline_log or []))
-                if already or part.id in listed_ids:
-                    continue
-                try:
-                    await prepare_part(part.id, db)
-                except Exception:
-                    pass
+            try:
+                await poll_identification_batches(db)
+            except Exception:
+                pass
+            try:
+                from app.models.part import MarketplaceListing
+                listed_ids = {r[0] for r in db.query(MarketplaceListing.part_id).filter(MarketplaceListing.status == "active").all()}
+                pending = db.query(Part).filter(Part.status == "draft", Part.active == True).all()  # noqa: E712
+                to_submit = [
+                    p for p in pending
+                    if p.id not in listed_ids
+                    and not any(s.get("step") == "identificacao" for s in (p.pipeline_log or []))
+                ]
+                if to_submit:
+                    await submit_identification_batch(to_submit, db)
+            except Exception:
+                pass
         finally:
             db.close()
 
