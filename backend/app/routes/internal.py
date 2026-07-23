@@ -26,28 +26,6 @@ def require_service_key(x_service_key: str = Header(default="")):
         raise HTTPException(status_code=401, detail="Chave de serviço inválida ou ausente")
 
 
-@router.get("/parts/stats-diag", dependencies=[Depends(require_service_key)])
-def parts_stats_diag(db: Session = Depends(get_db)):
-    """Diagnostico temporario: quantas pecas passaram pela identificacao
-    (esteira automatica) e quantas foram publicadas, pra cruzar com o uso
-    de tokens mostrado no console da Anthropic."""
-    from sqlalchemy import func as sqlfunc
-    identificadas = db.query(Part).filter(Part.pipeline_log.isnot(None)).all()
-    n_identificadas = sum(
-        1 for p in identificadas
-        if any(s.get("step") == "identificacao" for s in (p.pipeline_log or []))
-    )
-    n_publicadas = db.query(MarketplaceListing).filter(MarketplaceListing.status == "active").count()
-    por_status = dict(
-        db.query(Part.status, sqlfunc.count(Part.id)).group_by(Part.status).all()
-    )
-    return {
-        "pecas_identificadas_total": n_identificadas,
-        "listagens_ativas_total": n_publicadas,
-        "por_status": por_status,
-    }
-
-
 @router.get("/parts/pending", dependencies=[Depends(require_service_key)])
 def list_pending_parts(db: Session = Depends(get_db)):
     """Peças com foto já otimizada aguardando a esteira (status=draft) — é
