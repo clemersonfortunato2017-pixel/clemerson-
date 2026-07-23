@@ -26,6 +26,19 @@ def require_service_key(x_service_key: str = Header(default="")):
         raise HTTPException(status_code=401, detail="Chave de serviço inválida ou ausente")
 
 
+@router.get("/credit-check-diag", dependencies=[Depends(require_service_key)])
+async def credit_check_diag():
+    """Diagnostico temporario: chamada minima (max_tokens=10) pra confirmar
+    se o credito da Anthropic ja esta disponivel, sem gastar quase nada."""
+    import httpx as _httpx
+    key = settings.anthropic_api_key
+    headers = {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
+    body = {"model": "claude-sonnet-5", "max_tokens": 10, "messages": [{"role": "user", "content": "diga apenas ok"}]}
+    async with _httpx.AsyncClient() as client:
+        r = await client.post("https://api.anthropic.com/v1/messages", headers=headers, json=body, timeout=30)
+    return {"status_code": r.status_code, "body": r.text[:500]}
+
+
 @router.get("/parts/pending", dependencies=[Depends(require_service_key)])
 def list_pending_parts(db: Session = Depends(get_db)):
     """Peças com foto já otimizada aguardando a esteira (status=draft) — é
