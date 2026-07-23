@@ -39,7 +39,11 @@ async def _claude_call(client: httpx.AsyncClient, messages: list, tools: list | 
     if tools:
         body["tools"] = tools
     r = await client.post(ANTHROPIC_API, headers=headers, json=body, timeout=60)
-    r.raise_for_status()
+    if r.status_code >= 400:
+        # r.raise_for_status() por si só descarta o corpo da resposta — sem
+        # isso a gente só via "400 Bad Request" no log, sem saber o motivo
+        # real (formato de imagem inválido, url inacessível, etc).
+        raise RuntimeError(f"Anthropic API {r.status_code}: {r.text[:1000]}")
     return r.json()
 
 
